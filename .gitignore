@@ -5,6 +5,7 @@
 temp/
 cache/
 __pycache__/
+*.db
 # 环境配置文件（重要！避免泄露敏感信息）
 .env
 config/*.yml
