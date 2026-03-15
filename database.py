@@ -381,3 +381,76 @@ def update_task_status(task_id: int, status: str, error_msg: str = None) -> None
         print(f"❌ update_task_status 错误: {e}")
     finally:
         conn.close()
+
+
+# ============================================================================
+# RAG 查询函数
+# ============================================================================
+
+def get_events_for_entity(entity_id: str) -> list:
+    """
+    获取与指定实体相关的事件
+    
+    Args:
+        entity_id: 实体ID
+        
+    Returns:
+        事件列表
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM events 
+        WHERE involved_entities_json LIKE ? 
+        ORDER BY date DESC
+    """, (f'%"{entity_id}"%',))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_rag_context() -> str:
+    """
+    获取 RAG 上下文（用于 AI 对话）
+    
+    Returns:
+        结构化的纯文本上下文
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 获取最新 50 条事件
+    cursor.execute("""
+        SELECT title, date, summary FROM events 
+        ORDER BY date DESC LIMIT 50
+    """)
+    events = cursor.fetchall()
+    
+    # 获取最新 100 条关系
+    cursor.execute("""
+        SELECT r.source_id, r.target_id, r.relation_type,
+               e1.name as source_name, e2.name as target_name
+        FROM relationships r
+        JOIN entities e1 ON r.source_id = e1.id
+        JOIN entities e2 ON r.target_id = e2.id
+        ORDER BY r.source_id DESC LIMIT 100
+    """)
+    relationships = cursor.fetchall()
+    
+    conn.close()
+    
+    # 格式化事件
+    context_parts = ["【事件情报】"]
+    for e in events:
+        title, date, summary = e
+        context_parts.append(f"- [{date[:10]}] {title}: {summary[:100] if summary else ''}")
+    
+    # 格式化关系
+    context_parts.append("\n【实体关系】")
+    for r in relationships:
+        src_id, tgt_id, rel_type, src_name, tgt_name = r
+        context_parts.append(f"- {src_name} --[{rel_type}]--> {tgt_name}")
+    
+    return "\n".join(context_parts)

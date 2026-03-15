@@ -18,6 +18,9 @@ try:
 except ImportError:
     AGRAPH_AVAILABLE = False
 
+from rag import chat_with_graph
+from database import get_events_for_entity
+
 DB_PATH = Path(__file__).parent / "ai_tracker.db"
 
 def get_connection():
@@ -26,7 +29,7 @@ def get_connection():
     return conn
 
 # ============================================================================
-# 数据读取函数 (保留原有逻辑)
+# 数据读取函数
 # ============================================================================
 def get_summary_stats():
     conn = get_connection()
@@ -145,7 +148,7 @@ with st.sidebar:
 
     page = st.radio(
         "导航菜单",
-        ["🎛️ 指挥中心", "📚 情报档案", "🕸️ 战术图谱", "💬 参谋部 (开发中)"],
+        ["🎛️ 指挥中心", "📚 情报档案", "🕸️ 战术图谱", "💬 参谋部"],
         label_visibility="collapsed"
     )
 
@@ -287,6 +290,29 @@ elif page == "🕸️ 战术图谱":
 # ============================================================================
 # Page 4: 参谋部 (AI Copilot)
 # ============================================================================
-elif page == "💬 参谋部 (开发中)":
+elif page == "💬 参谋部":
     st.title("💬 参谋部 (AI Copilot)")
-    st.info("🧠 **Graph-RAG 智能问答模块正在接入中...**\n\n未来你可以在这里直接用自然语言向 AI 提问，系统将自动检索底层图谱与事件摘要，为你生成深度产业洞察。")
+
+    # 初始化会话状态
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # 显示历史消息
+    for msg in st.session_state.messages:
+        with st.chat_message(msg.get("role", "user")):
+            st.markdown(msg.get("content", ""))
+
+    # 接收用户输入
+    if prompt := st.chat_input("询问关于 AI 产业的任何情报..."):
+        # 显示用户消息
+        st.chat_message("user").markdown(prompt)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+
+        # 调用 RAG 获取回复
+        with st.spinner("🧠 正在检索底层图谱与事件库..."):
+            response = chat_with_graph(prompt, st.session_state.messages[:-1])
+
+        # 显示 AI 回复
+        with st.chat_message("assistant"):
+            st.markdown(response)
+        st.session_state.messages.append({"role": "assistant", "content": response, "is_bot": True})
