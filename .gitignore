@@ -1,0 +1,13 @@
+# 通用忽略项
+.DS_Store
+*.log
+*.tmp
+temp/
+cache/
+__pycache__/
+# 环境配置文件（重要！避免泄露敏感信息）
+.env
+config/*.yml
+config/*.json
+# 依赖包（根据项目类型选择）
+venv/
