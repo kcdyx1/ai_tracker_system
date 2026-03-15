@@ -277,19 +277,39 @@ if __name__ == "__main__":
 def push_task(url: str) -> bool:
     """
     将 URL 插入任务队列（状态为 pending）
-    使用 INSERT OR IGNORE 避免重复处理同一链接
-    返回是否成功加入
+    如果 URL 已存在且状态为 failed/completed，则重置为 pending 重新处理
+    返回是否成功加入或重试
     """
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            INSERT OR IGNORE INTO task_queue (url, status, created_at)
-            VALUES (?, 'pending', ?)
-        """, (url, datetime.now().isoformat()))
-        conn.commit()
-        # 判断是否成功插入（受影响行数 > 0 表示新插入）
-        return cursor.rowcount > 0
+        # 先查询 URL 是否存在
+        cursor.execute("SELECT status FROM task_queue WHERE url = ?", (url,))
+        row = cursor.fetchone()
+        
+        if row is None:
+            # 不存在，插入新任务
+            cursor.execute("""
+                INSERT INTO task_queue (url, status, created_at)
+                VALUES (?, 'pending', ?)
+            """, (url, datetime.now().isoformat()))
+            conn.commit()
+            return True
+        else:
+            # 已存在，检查状态
+            status = row[0]
+            if status in ('failed', 'completed'):
+                # 重新打回队列
+                cursor.execute("""
+                    UPDATE task_queue 
+                    SET status = 'pending', error_message = NULL, created_at = ? 
+                    WHERE url = ?
+                """, (datetime.now().isoformat(), url))
+                conn.commit()
+                return True
+            else:
+                # 正在处理中，不做操作
+                return False
     except Exception as e:
         print(f"❌ push_task 错误: {e}")
         return False
