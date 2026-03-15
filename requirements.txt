@@ -5,6 +5,7 @@ pydantic>=2.0.0
 instructor
 anthropic
 streamlit
+streamlit-agraph
 pandas
 
 # Web 服务依赖

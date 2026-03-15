@@ -13,6 +13,13 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
+# 导入图谱可视化库
+try:
+    from streamlit_agraph import agraph, Node, Edge, Config
+    AGRAPH_AVAILABLE = True
+except ImportError:
+    AGRAPH_AVAILABLE = False
+
 
 # 数据库路径
 DB_PATH = Path(__file__).parent / "ai_tracker.db"
@@ -158,6 +165,85 @@ def convert_event_entities_to_names(event: dict) -> dict:
     return event
 
 
+def get_graph_data(entity_id: str = None) -> dict:
+    """
+    获取图谱数据
+    
+    Args:
+        entity_id: 可选，指定实体ID。如果传入，则获取该实体的一度关系；
+                   如果不传，则获取全局最新的50条关系。
+    
+    Returns:
+        包含 nodes 和 edges 的字典
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    nodes = []
+    edges = []
+    entity_ids = set()
+    
+    if entity_id:
+        # 查询该实体及其直接相连的一度关系
+        # 作为源实体
+        cursor.execute("""
+            SELECT r.source_id, r.target_id, r.relation_type, 
+                   e1.name as source_name, e1.type as source_type,
+                   e2.name as target_name, e2.type as target_type
+            FROM relationships r
+            JOIN entities e1 ON r.source_id = e1.id
+            JOIN entities e2 ON r.target_id = e2.id
+            WHERE r.source_id = ? OR r.target_id = ?
+        """, (entity_id, entity_id))
+        
+        for row in cursor.fetchall():
+            source_id, target_id, rel_type, source_name, source_type, target_name, target_type = row
+            entity_ids.add(source_id)
+            entity_ids.add(target_id)
+            edges.append({
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": rel_type
+            })
+    else:
+        # 获取全局最新的50条关系
+        cursor.execute("""
+            SELECT r.source_id, r.target_id, r.relation_type,
+                   e1.name as source_name, e1.type as source_type,
+                   e2.name as target_name, e2.type as target_type
+            FROM relationships r
+            JOIN entities e1 ON r.source_id = e1.id
+            JOIN entities e2 ON r.target_id = e2.id
+            ORDER BY r.source_id DESC
+            LIMIT 50
+        """)
+        
+        for row in cursor.fetchall():
+            source_id, target_id, rel_type, source_name, source_type, target_name, target_type = row
+            entity_ids.add(source_id)
+            entity_ids.add(target_id)
+            edges.append({
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": rel_type
+            })
+    
+    # 查询涉及的实体详情
+    for eid in entity_ids:
+        cursor.execute("SELECT id, name, type FROM entities WHERE id = ?", (eid,))
+        row = cursor.fetchone()
+        if row:
+            nodes.append({
+                "id": row[0],
+                "name": row[1],
+                "type": row[2]
+            })
+    
+    conn.close()
+    
+    return {"nodes": nodes, "edges": edges}
+
+
 # ============================================================================
 # Streamlit 页面配置
 # ============================================================================
@@ -243,7 +329,7 @@ with st.sidebar:
 st.title("📡 AI & Data 产业追踪雷达")
 
 # 创建 Tab
-tab1, tab2 = st.tabs(["📅 产业时间线", "🔍 实体探索器"])
+tab1, tab2, tab3 = st.tabs(["📅 产业时间线", "🔍 实体探索器", "🕸️ 动态关系图谱"])
 
 # ============================================================================
 # Tab 1: 产业时间线
@@ -369,6 +455,85 @@ with tab2:
         with st.expander(f"💡 技术概念 ({len(techs)})"):
             for t in techs:
                 st.markdown(f"- **{t['name']}**")
+
+
+# ============================================================================
+# Tab 3: 动态关系图谱
+# ============================================================================
+
+with tab3:
+    st.header("🕸️ 动态关系图谱")
+    
+    if not AGRAPH_AVAILABLE:
+        st.error("❌ streamlit-agraph 未安装，请运行: pip install streamlit-agraph")
+    else:
+        # 提供选择：全局图谱或单个实体图谱
+        graph_mode = st.radio(
+            "选择图谱模式",
+            ["全局关系图谱", "单个实体图谱"],
+            horizontal=True
+        )
+        
+        if graph_mode == "单个实体图谱":
+            # 选择实体
+            all_entities = get_all_entities()
+            entity_options = {e["name"]: e["id"] for e in all_entities}
+            selected_entity_name = st.selectbox("选择实体", list(entity_options.keys()))
+            selected_entity_id = entity_options[selected_entity_name]
+            graph_data = get_graph_data(selected_entity_id)
+        else:
+            graph_data = get_graph_data()
+        
+        if not graph_data["nodes"]:
+            st.info("暂无图谱数据，请先提取一些知识")
+        else:
+            # 构建节点
+            nodes = []
+            for node in graph_data["nodes"]:
+                # 根据类型设置颜色
+                color_map = {
+                    "company": "#3498db",    # 蓝色
+                    "product": "#e74c3c",   # 红色
+                    "person": "#2ecc71",    # 绿色
+                    "tech_concept": "#9b59b6"  # 紫色
+                }
+                color = color_map.get(node["type"], "#95a5a6")
+                
+                nodes.append(
+                    Node(
+                        id=node["id"],
+                        label=node["name"],
+                        size=25,
+                        color=color,
+                        title=f"{node['name']} ({node['type']})"
+                    )
+                )
+            
+            # 构建边
+            edges = []
+            for edge in graph_data["edges"]:
+                edges.append(
+                    Edge(
+                        source=edge["source_id"],
+                        target=edge["target_id"],
+                        label=edge["relation_type"],
+                        color="#bdc3c7"
+                    )
+                )
+            
+            # 配置图谱
+            config = Config(
+                height=600,
+                width={"percent": 100},
+                directed=True,
+                physics=True,
+                hierarchical=False,
+                interaction={"hover": True}
+            )
+            
+            # 渲染图谱
+            st.markdown(f"**节点数: {len(nodes)} | 边数: {len(edges)}**")
+            agraph(nodes=nodes, edges=edges, config=config)
 
 
 # ============================================================================
