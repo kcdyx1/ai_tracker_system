@@ -29,10 +29,6 @@ from ingestion import fetch_clean_markdown
 API_KEY = os.environ.get("MINIMAX_API_KEY", "")
 
 
-# 任务队列
-task_queue = []
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理，启动时初始化数据库和后台 Worker"""
@@ -85,23 +81,23 @@ async def background_worker():
                 print(f"\n[Worker] 开始处理: {url}")
                 
                 try:
-                    # Step 1: 抓取网页内容
+                    # Step 1: 抓取网页内容 (异步执行避免阻塞)
                     print(f"  🔄 正在抓取网页...")
-                    content = fetch_clean_markdown(url)
+                    content = await asyncio.to_thread(fetch_clean_markdown, url)
                     
                     if not content:
                         raise Exception("网页抓取失败，返回内容为空")
                     
                     print(f"  ✅ 抓取成功，内容长度: {len(content)} 字符")
                     
-                    # Step 2: AI 知识提取
+                    # Step 2: AI 知识提取 (异步执行避免阻塞)
                     print(f"  🔄 正在进行 AI 知识提取...")
-                    result = extract_with_validation(content)
+                    result = await asyncio.to_thread(extract_with_validation, content)
                     print(f"  ✅ 提取成功: {len(result.entities)} 实体, {len(result.events)} 事件")
                     
-                    # Step 3: 保存到数据库
+                    # Step 3: 保存到数据库 (异步执行避免阻塞)
                     print(f"  🔄 正在保存到数据库...")
-                    save_extraction_result(result)
+                    await asyncio.to_thread(save_extraction_result, result)
                     print(f"  ✅ 保存成功")
                     
                     # 更新任务状态为完成

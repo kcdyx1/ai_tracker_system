@@ -10,7 +10,7 @@ AI与数据产业智能跟踪系统 - 核心本体数据模型
 """
 
 from datetime import datetime
-from typing import Optional, List, Union, Annotated
+from typing import Optional, List, Union, Annotated, Literal
 from uuid import uuid4
 import enum
 import pydantic
@@ -121,12 +121,12 @@ class Entity(BaseNode):
     实体基类
     
     属性:
-        entity_type: 实体类型
+        entity_type: 实体类型 (使用 Literal 支持多态)
         name: 实体名称
         aliases: 别名列表
         description: 实体描述
     """
-    entity_type: EntityType = Field(..., description="实体类型")
+    entity_type: Literal["company", "product", "person", "tech_concept"] = Field(..., description="实体类型")
     name: str = Field(..., description="实体名称")
     aliases: List[str] = Field(default_factory=list, description="别名列表")
     description: str = Field(default="", description="实体描述")
@@ -151,7 +151,7 @@ class Company(Entity):
         website: 公司官网
         status: 公司状态
     """
-    entity_type: EntityType = Field(default=EntityType.COMPANY, description="实体类型")
+    entity_type: Literal["company"] = Field(default="company", description="实体类型")
     founded_year: Optional[int] = Field(default=None, description="成立年份")
     website: Optional[str] = Field(default=None, description="公司官网")
     status: CompanyStatus = Field(default=CompanyStatus.ACTIVE, description="公司状态")
@@ -176,7 +176,7 @@ class Product(Entity):
         product_type: 产品类型
         company_id: 所属公司ID
     """
-    entity_type: EntityType = Field(default=EntityType.PRODUCT, description="实体类型")
+    entity_type: Literal["product"] = Field(default="product", description="实体类型")
     product_type: ProductType = Field(..., description="产品类型")
     company_id: Optional[str] = Field(default=None, description="所属公司ID")
     
@@ -198,7 +198,7 @@ class Person(Entity):
     属性:
         current_title: 当前职位
     """
-    entity_type: EntityType = Field(default=EntityType.PERSON, description="实体类型")
+    entity_type: Literal["person"] = Field(default="person", description="实体类型")
     current_title: Optional[str] = Field(default=None, description="当前职位")
     
     model_config = {
@@ -218,7 +218,7 @@ class TechConcept(Entity):
     属性:
         category: 技术类别
     """
-    entity_type: EntityType = Field(default=EntityType.TECH_CONCEPT, description="实体类型")
+    entity_type: Literal["tech_concept"] = Field(default="tech_concept", description="实体类型")
     category: TechCategory = Field(..., description="技术类别")
     
     model_config = {
@@ -229,6 +229,10 @@ class TechConcept(Entity):
             }
         }
     }
+
+
+# 实体联合类型，供 AI 提取使用 (支持多态)
+EntityUnion = Union[Company, Product, Person, TechConcept]
 
 
 # ============================================================================
@@ -316,7 +320,7 @@ class ExtractionResult(BaseModel):
     - events: 提取到的事件
     - relationships: 提取到的实体关系
     """
-    entities: List[Entity] = Field(description="提取到的所有实体")
+    entities: List[EntityUnion] = Field(description="提取到的所有实体")
     events: List[Event] = Field(description="提取到的事件")
     relationships: List[Relationship] = Field(description="提取到的实体关系")
     

@@ -20,8 +20,10 @@ DB_PATH = Path(__file__).parent / "ai_tracker.db"
 
 def get_connection() -> sqlite3.Connection:
     """获取数据库连接"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
+    # 开启 WAL 模式，提高并发性能
+    conn.execute('PRAGMA journal_mode=WAL;')
     return conn
 
 
