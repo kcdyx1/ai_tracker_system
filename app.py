@@ -236,9 +236,46 @@ elif page == "📚 情报档案":
             st.dataframe(df_comp[['name', 'description', 'aliases_json', 'created_at']], use_container_width=True, hide_index=True)
 
     with tab_product:
-        df_prod = pd.DataFrame([e for e in entities if e['type'] == 'product'])
-        if not df_prod.empty:
-            st.dataframe(df_prod[['name', 'description', 'created_at']], use_container_width=True, hide_index=True)
+        prod_list = [e.copy() for e in entities if e['type'] == 'product']
+        if prod_list:
+            import json
+            for p in prod_list:
+                attr_str = p.get('attributes_json')
+                if attr_str:
+                    try:
+                        attrs = json.loads(attr_str)
+                        for k, v in attrs.items():
+                            # 将列表转换为逗号分隔的字符串，否则表格无法完美渲染
+                            p[k] = ", ".join(v) if isinstance(v, list) else str(v)
+                    except:
+                        pass
+
+            df_prod = pd.DataFrame(prod_list)
+
+            # 定义期望展示的列和专业的列名映射
+            col_mapping = {
+                "name": "🚀 产品名称",
+                "parameters_size": "🧮 参数量级",
+                "context_window": "📚 上下文",
+                "is_open_source": "🔓 开源",
+                "architecture": "🏗️ 架构",
+                "modalities": "👁️ 支持模态",
+                "base_model": "🧬 底座模型",
+                "pricing_model": "💰 定价模式",
+                "description": "📝 简介"
+            }
+
+            # 只提取数据中真实存在的列，防止报错
+            existing_cols = [c for c in col_mapping.keys() if c in df_prod.columns]
+
+            st.dataframe(
+                df_prod[existing_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config=col_mapping
+            )
+        else:
+            st.info("暂无产品数据。")
 
     with tab_person:
         df_pers = pd.DataFrame([e for e in entities if e['type'] == 'person'])
