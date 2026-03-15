@@ -221,7 +221,12 @@ with st.sidebar:
                     )
                     if response.status_code == 200:
                         result = response.json()
-                        st.success(f"✅ {result['message']}")
+                        if result.get("status") == "queued":
+                            st.success("✅ 链接已成功加入后台处理队列！")
+                        elif result.get("status") == "already_exists":
+                            st.warning("⚠️ 该链接已经在队列中或已处理过。")
+                        else:
+                            st.success("✅ 请求已提交！")
                         st.info("💡 后台正在处理，请稍后刷新页面查看结果")
                     else:
                         st.error(f"❌ 请求失败: {response.status_code}")
