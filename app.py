@@ -390,7 +390,7 @@ with st.sidebar:
 st.title("📡 AI & Data 产业追踪雷达")
 
 # 创建 Tab
-tab1, tab2, tab3 = st.tabs(["📅 产业时间线", "🔍 实体探索器", "⚙️ 系统监控"])
+tab1, tab2, tab3 = st.tabs(["📅 产业时间线", "🕸️ 动态关系图谱", "⚙️ 系统监控"])
 
 # ============================================================================
 # Tab 1: 产业时间线
@@ -428,101 +428,10 @@ with tab1:
 
 
 # ============================================================================
-# Tab 2: 实体探索器
+# Tab 2: 动态关系图谱
 # ============================================================================
 
 with tab2:
-    st.header("🔍 实体探索器")
-    
-    # 搜索框
-    search_query = st.text_input("🔎 搜索公司、产品或人物", placeholder="输入名称搜索...")
-    
-    if search_query:
-        results = get_entity_by_name(search_query)
-        
-        if results:
-            st.success(f"找到 {len(results)} 个结果")
-            
-            # 创建选择列表
-            options = [f"{r['name']} ({r['type']})" for r in results]
-            selected = st.selectbox("选择实体查看详情", options)
-            
-            if selected:
-                # 解析选中的实体
-                selected_name = selected.split(" (")[0]
-                entity = next((r for r in results if r["name"] == selected_name), None)
-                
-                if entity:
-                    # 展示基本信息
-                    st.markdown("### 📋 实体详情")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown(f"**名称**: {entity['name']}")
-                        st.markdown(f"**类型**: {entity['type']}")
-                    with col2:
-                        aliases = json.loads(entity.get("aliases_json", "[]"))
-                        if aliases:
-                            st.markdown(f"**别名**: {', '.join(aliases)}")
-                    
-                    if entity.get("description"):
-                        st.markdown(f"**描述**: {entity['description']}")
-                    
-                    # 展示关系网
-                    st.markdown("### 🕸️ 关系网络")
-                    
-                    relationships = get_entity_relationships(entity["id"])
-                    
-                    # 出向关系
-                    if relationships["outgoing"]:
-                        st.markdown("**该实体 → 其他实体:**")
-                        for rel in relationships["outgoing"]:
-                            st.markdown(f"- {entity['name']} --[{rel['relation_type']}]--> {rel['target_name']} ({rel['target_type']})")
-                    
-                    # 入向关系
-                    if relationships["incoming"]:
-                        st.markdown("**其他实体 → 该实体:**")
-                        for rel in relationships["incoming"]:
-                            st.markdown(f"- {rel['source_name']} --[{rel['relation_type']}]--> {entity['name']}")
-                    
-                    if not relationships["outgoing"] and not relationships["incoming"]:
-                        st.info("暂无关系数据")
-        else:
-            st.warning("未找到匹配结果")
-    else:
-        # 显示所有实体列表
-        all_entities = get_all_entities()
-        
-        st.markdown("### 所有实体")
-        
-        # 按类型分组
-        companies = [e for e in all_entities if e["type"] == "company"]
-        products = [e for e in all_entities if e["type"] == "product"]
-        persons = [e for e in all_entities if e["type"] == "person"]
-        techs = [e for e in all_entities if e["type"] == "tech_concept"]
-        
-        with st.expander(f"🏢 公司 ({len(companies)})", expanded=True):
-            for c in companies:
-                st.markdown(f"- **{c['name']}**")
-        
-        with st.expander(f"📦 产品 ({len(products)})"):
-            for p in products:
-                st.markdown(f"- **{p['name']}**")
-        
-        with st.expander(f"👤 人物 ({len(persons)})"):
-            for p in persons:
-                st.markdown(f"- **{p['name']}**")
-        
-        with st.expander(f"💡 技术概念 ({len(techs)})"):
-            for t in techs:
-                st.markdown(f"- **{t['name']}**")
-
-
-# ============================================================================
-# Tab 3: 动态关系图谱
-# ============================================================================
-
-with tab3:
     st.header("🕸️ 动态关系图谱")
     
     if not AGRAPH_AVAILABLE:
