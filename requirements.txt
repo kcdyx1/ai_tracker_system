@@ -7,6 +7,7 @@ anthropic
 streamlit
 streamlit-agraph
 pandas
+cloudscraper
 
 # Web 服务依赖
 fastapi

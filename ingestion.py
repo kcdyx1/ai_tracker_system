@@ -6,6 +6,7 @@ AI Tracker System - 网页抓取清洗模块
 """
 
 import requests
+import cloudscraper
 
 
 # 常见的请求头，防止被拦截
@@ -48,6 +49,8 @@ def fetch_clean_markdown(url: str) -> str:
             else:
                 print(f"  ✅ r.jina.ai 抓取成功")
                 return content
+        else:
+            print(f"  ⚠️ r.jina.ai 抓取失败，状态码: {response.status_code}")
                 
     except Exception as e:
         print(f"  ⚠️ r.jina.ai 方法失败: {e}")
@@ -58,15 +61,12 @@ def fetch_clean_markdown(url: str) -> str:
 
 def fetch_direct(url: str) -> str:
     """
-    备用方法：直接抓取网页
+    备用方法：直接抓取网页（使用 cloudscraper 突破反爬）
     """
-    print(f"  🔄 尝试直接抓取...")
+    print(f"  🔄 尝试 cloudscraper 直接抓取...")
     try:
-        response = requests.get(
-            url,
-            headers=DEFAULT_HEADERS,
-            timeout=15
-        )
+        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+        response = scraper.get(url, timeout=20)
         
         if response.status_code == 200:
             # 尝试提取纯文本
