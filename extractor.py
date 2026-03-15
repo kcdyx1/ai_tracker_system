@@ -96,6 +96,9 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 - 在生成 Events 和 Relationships 时，source_id, target_id 和 involved_entity_ids 必须严格使用你刚才为实体生成的这些 ID
 - 绝对不能使用实体名称，必须使用 ID！
 
+【重要】内容限制：
+- 如果文本内容极其丰富，请专注于提取「最具代表性」的 15 个实体和 5 个核心事件，确保 JSON 结构的完整性。不要试图穷尽所有细节。
+
 请严格按照JSON格式返回结果。日期格式使用 ISO 8601 (如 2024-02-16)。
 
 {context_entities_str}
@@ -105,7 +108,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
         model="MiniMax-M2.5",
-        max_tokens=4000,
+        max_tokens=8000,
         system=system_prompt,
         messages=[
             {
@@ -125,13 +128,33 @@ def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult
     
     如果模型返回结果不符合要求，会自动重试
     """
-    # 获取现有实体库
+    # 获取现有实体库，但只注入文本中实际提到的实体
     existing_entities = query_all_entities()
+    text_lower = text.lower()
+    
+    # 过滤：只保留文本中提到的实体
+    matched_entities = []
+    for e in existing_entities:
+        name_lower = e['name'].lower()
+        # 匹配名称
+        if name_lower in text_lower:
+            matched_entities.append(e)
+            continue
+        # 匹配别名
+        if e.get('aliases_json'):
+            try:
+                aliases = json.loads(e['aliases_json'])
+                for alias in aliases:
+                    if alias.lower() in text_lower:
+                        matched_entities.append(e)
+                        break
+            except:
+                pass
+    
     context_entities_str = ""
-    if existing_entities:
+    if matched_entities:
         context_entities_str = "\n【现有实体库参考】(极度重要)\n如果在文本中发现以下实体（或其别名），你**必须**严格复用对应的【现有 ID】，绝对不能生成新 ID：\n"
-        for e in existing_entities:
-            # 为节省 token，只拼接核心信息
+        for e in matched_entities:
             context_entities_str += f"- 现有 ID: {e['id']} | 名称: {e['name']} | 类型: {e['type']}\n"
     
     for attempt in range(max_retries):
@@ -150,7 +173,15 @@ def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult
             return result
             
         except Exception as e:
+            error_msg = str(e)
             print(f"提取失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            
+            # 如果是 token 限制错误，减少上下文重试
+            if "length" in error_msg.lower() or "token" in error_msg.lower():
+                print("检测到 token 限制，缩减上下文后重试...")
+                # 清空上下文，减少输入长度
+                context_entities_str = ""
+            
             if attempt == max_retries - 1:
                 raise
     
