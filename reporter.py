@@ -124,7 +124,18 @@ def generate_ai_report(context: str, report_type: str = "周报") -> str:
         ]
     )
     
-    return message.content[0].text
+    # 兼容不同版本的 anthropic sdk 对象属性，提取真实文本
+    final_text = ""
+    for block in message.content:
+        if getattr(block, "type", "") == "text":
+            final_text += block.text
+        elif hasattr(block, "text"):
+            final_text += block.text
+    
+    if not final_text:
+        return "⚠️ 报告生成失败：未能从大模型返回结果中提取出有效文本。"
+    
+    return final_text
 
 
 def save_local_report(markdown_content: str, report_type: str = "周报") -> str:
