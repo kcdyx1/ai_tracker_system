@@ -29,6 +29,7 @@ from ontology import (
     RelationType,
     EntityType,
 )
+from database import query_all_entities
 
 
 def create_extractor():
@@ -55,12 +56,13 @@ def create_extractor():
     return extractor
 
 
-def extract_knowledge(text: str) -> ExtractionResult:
+def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionResult:
     """
     从文本中提取知识
     
     Args:
         text: 输入文本
+        context_entities_str: 现有实体上下文（用于实体对齐）
         
     Returns:
         ExtractionResult: 包含实体、事件、关系的结构化结果
@@ -68,7 +70,7 @@ def extract_knowledge(text: str) -> ExtractionResult:
     extractor = create_extractor()
     
     # 构建系统提示词
-    system_prompt = """你是一个专业的知识提取助手。你的任务是从给定的文本中提取结构化的知识，包括：
+    system_prompt = f"""你是一个专业的知识提取助手。你的任务是从给定的文本中提取结构化的知识，包括：
 
 1. 实体 (Entities):
    - 公司 (Company): 公司名称、成立年份、官网、状态
@@ -90,7 +92,11 @@ def extract_knowledge(text: str) -> ExtractionResult:
 - 在生成 Events 和 Relationships 时，source_id, target_id 和 involved_entity_ids 必须严格使用你刚才为实体生成的这些 ID
 - 绝对不能使用实体名称，必须使用 ID！
 
-请严格按照JSON格式返回结果。日期格式使用 ISO 8601 (如 2024-02-16)。"""
+请严格按照JSON格式返回结果。日期格式使用 ISO 8601 (如 2024-02-16)。
+
+{context_entities_str}
+
+请严格按照JSON格式返回结果。"""
     
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
@@ -115,9 +121,18 @@ def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult
     
     如果模型返回结果不符合要求，会自动重试
     """
+    # 获取现有实体库
+    existing_entities = query_all_entities()
+    context_entities_str = ""
+    if existing_entities:
+        context_entities_str = "\n【现有实体库参考】(极度重要)\n如果在文本中发现以下实体（或其别名），你**必须**严格复用对应的【现有 ID】，绝对不能生成新 ID：\n"
+        for e in existing_entities:
+            # 为节省 token，只拼接核心信息
+            context_entities_str += f"- 现有 ID: {e['id']} | 名称: {e['name']} | 类型: {e['type']}\n"
+    
     for attempt in range(max_retries):
         try:
-            result = extract_knowledge(text)
+            result = extract_knowledge(text, context_entities_str)
             
             # 基本验证
             if result is None:
