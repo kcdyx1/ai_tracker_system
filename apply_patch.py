@@ -1,55 +1,95 @@
-import os
+import re
 from pathlib import Path
 
-def patch_files():
-    # 1. 创建 .env
-    env_file = Path(".env")
-    if not env_file.exists():
-        env_file.write_text("MINIMAX_API_KEY=your_api_key_here\nFEISHU_WEBHOOK_URL=your_webhook_here\n")
-        print("✅ .env 文件已创建")
+def patch_feishu_webhook():
+    fpath = Path("reporter.py")
+    content = fpath.read_text(encoding="utf-8")
 
-    # 2. 更新 requirements.txt
-    req_file = Path("requirements.txt")
-    if req_file.exists():
-        req_content = req_file.read_text()
-        if "python-dotenv" not in req_content:
-            req_file.write_text(req_content.strip() + "\npython-dotenv\n")
-            print("✅ python-dotenv 已加入 requirements.txt")
+    # 匹配旧的 send_feishu_webhook 函数
+    old_func_pattern = r'def send_feishu_webhook\(markdown_content: str, webhook_url: str\) -> bool:.*?return False'
 
-    # 3. 注入 dotenv
-    target_files = ["server.py", "extractor.py", "reporter.py", "rag.py", "app.py"]
-    inject_code = "from dotenv import load_dotenv\nload_dotenv()\n"
+    # 全新的多模块解析推送逻辑
+    new_func = '''def send_feishu_webhook(markdown_content: str, webhook_url: str) -> bool:
+    """
+    发送飞书 Webhook 推送 (精美排版版)
+    """
+    import requests
+    try:
+        elements = []
+        current_text = []
+        
+        # 逐行解析 Markdown，转化为飞书原生卡片组件
+        for line in markdown_content.split('\\n'):
+            line_stripped = line.strip()
+            
+            if line_stripped.startswith('# '):
+                # 一级标题：作为开篇引言
+                current_text.append(f"**🔥 {line_stripped[2:].strip()}**\\n")
+                
+            elif line_stripped.startswith('## '):
+                # 二级标题：切断当前文本块，插入原生分割线，并作为新区块的 Header
+                if current_text and any(t.strip() for t in current_text):
+                    elements.append({"tag": "markdown", "content": "\\n".join(current_text).strip()})
+                    current_text = []
+                    
+                elements.append({"tag": "hr"})
+                elements.append({"tag": "markdown", "content": f"**📌 {line_stripped[3:].strip()}**"})
+                
+            elif line_stripped.startswith('### '):
+                # 三级标题：转换为带小蓝点的加粗文本
+                current_text.append(f"\\n**🔹 {line_stripped[4:].strip()}**")
+                
+            elif line_stripped.startswith('#### '):
+                current_text.append(f"**{line_stripped[5:].strip()}**")
+                
+            elif line_stripped == '---':
+                # 忽略原生的 Markdown 分割线，因为我们用了飞书原生 hr
+                pass
+                
+            else:
+                current_text.append(line)
+        
+        # 收尾最后一个文本块
+        if current_text and any(t.strip() for t in current_text):
+            elements.append({"tag": "markdown", "content": "\\n".join(current_text).strip()})
 
-    for fname in target_files:
-        fpath = Path(fname)
-        if fpath.exists():
-            content = fpath.read_text()
-            if "load_dotenv" not in content:
-                # 寻找合适的注入点
-                if "import os" in content:
-                    content = content.replace("import os", "import os\n" + inject_code, 1)
-                elif "import streamlit as st" in content:
-                    content = content.replace("import streamlit as st", "import streamlit as st\n" + inject_code, 1)
-                else:
-                    content = inject_code + "\n" + content
-                fpath.write_text(content)
-                print(f"✅ 成功为 {fname} 注入环境变量加载代码")
+        payload = {
+            "msg_type": "interactive",
+            "card": {
+                "config": {
+                    "wide_screen_mode": True  # 开启宽屏模式，更适合阅读长报告
+                },
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": "📡 AI 产业情报雷达"
+                    },
+                    "template": "blue"
+                },
+                # 飞书限制 elements 最多 50 个，截断保护
+                "elements": elements[:50]
+            }
+        }
+        
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            print("✅ 飞书精美卡片推送成功")
+            return True
+        else:
+            print(f"❌ 飞书推送失败: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 飞书推送异常: {e}")
+        return False'''
 
-    # 4. 注入缓存装饰器到 app.py
-    app_file = Path("app.py")
-    if app_file.exists():
-        app_content = app_file.read_text()
-        funcs_to_cache = [
-            "def get_summary_stats():",
-            "def get_all_entities():",
-            "def get_latest_events(limit: int = 20):"
-        ]
-        for func in funcs_to_cache:
-            target = f"@st.cache_data(ttl=60)\n{func}"
-            if func in app_content and target not in app_content:
-                app_content = app_content.replace(func, target)
-        app_file.write_text(app_content)
-        print("✅ 成功为 app.py 添加缓存装饰器")
+    if re.search(old_func_pattern, content, flags=re.DOTALL):
+        new_content = re.sub(old_func_pattern, new_func, content, flags=re.DOTALL)
+        fpath.write_text(new_content, encoding="utf-8")
+        print("✅ reporter.py 飞书推送 UI 美化升级完成！")
+    else:
+        print("⚠️ 未找到匹配的旧函数，请检查 reporter.py。")
 
 if __name__ == '__main__':
-    patch_files()
+    patch_feishu_webhook()
