@@ -411,46 +411,75 @@ def get_events_for_entity(entity_id: str) -> list:
     return [dict(row) for row in rows]
 
 
-def get_rag_context() -> str:
+def get_smart_rag_context(query: str) -> str:
     """
-    获取 RAG 上下文（用于 AI 对话）
-    
-    Returns:
-        结构化的纯文本上下文
+    智能 Graph-RAG 检索：
+    1. 根据 query 提取提及的实体
+    2. 精准查询这些实体的关联事件和关系
     """
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # 获取最新 50 条事件
-    cursor.execute("""
-        SELECT title, date, summary FROM events 
-        ORDER BY date DESC LIMIT 50
-    """)
-    events = cursor.fetchall()
-    
-    # 获取最新 100 条关系
-    cursor.execute("""
-        SELECT r.source_id, r.target_id, r.relation_type,
-               e1.name as source_name, e2.name as target_name
+
+    # 1. 实体探针：找出 query 中提及的实体
+    cursor.execute("SELECT id, name, aliases_json FROM entities")
+    all_entities = cursor.fetchall()
+
+    matched_entity_ids = set()
+    for row in all_entities:
+        eid, name, aliases_str = row[0], row[1], row[2]
+        # 匹配名称
+        if name.lower() in query.lower():
+            matched_entity_ids.add(eid)
+        # 匹配别名
+        if aliases_str:
+            try:
+                aliases = json.loads(aliases_str)
+                for alias in aliases:
+                    if alias.lower() in query.lower():
+                        matched_entity_ids.add(eid)
+            except:
+                pass
+
+    # 2. 如果没有任何匹配，降级为全局最新摘要（Fallback）
+    if not matched_entity_ids:
+        cursor.execute("SELECT title, date, summary FROM events ORDER BY date DESC LIMIT 30")
+        events = cursor.fetchall()
+        conn.close()
+
+        ctx = ["【系统提示】未在问题中检测到明确的具体实体，以下提供全局最新产业动态："]
+        for e in events:
+            ctx.append(f"- [{e[1][:10]}] {e[0]}: {e[2]}")
+        return "\n".join(ctx)
+
+    # 3. 如果有匹配，执行图谱精准下钻 (Drill-down)
+    matched_ids_list = list(matched_entity_ids)
+    context_parts = [f"【精准检索】系统在提问中识别到了 {len(matched_ids_list)} 个核心实体，以下是它们的专属档案：\n"]
+
+    # 获取精准事件
+    for eid in matched_ids_list:
+        cursor.execute("SELECT title, date, summary FROM events WHERE involved_entities_json LIKE ? ORDER BY date DESC LIMIT 20", (f'%"{eid}"%',))
+        events = cursor.fetchall()
+        if events:
+            context_parts.append(f"\n--- 关联事件 ---")
+            for e in events:
+                context_parts.append(f"- [{e[1][:10]}] {e[0]}: {e[2]}")
+
+    # 获取精准连线关系
+    placeholders = ','.join(['?'] * len(matched_ids_list))
+    cursor.execute(f"""
+        SELECT r.relation_type, e1.name, e2.name
         FROM relationships r
         JOIN entities e1 ON r.source_id = e1.id
         JOIN entities e2 ON r.target_id = e2.id
-        ORDER BY r.source_id DESC LIMIT 100
-    """)
+        WHERE r.source_id IN ({placeholders}) OR r.target_id IN ({placeholders})
+        LIMIT 50
+    """, matched_ids_list * 2)
     relationships = cursor.fetchall()
-    
+
+    if relationships:
+        context_parts.append(f"\n--- 实体商业/技术关系网 ---")
+        for r in relationships:
+            context_parts.append(f"- {r[1]} --[{r[0]}]--> {r[2]}")
+
     conn.close()
-    
-    # 格式化事件
-    context_parts = ["【事件情报】"]
-    for e in events:
-        title, date, summary = e
-        context_parts.append(f"- [{date[:10]}] {title}: {summary[:100] if summary else ''}")
-    
-    # 格式化关系
-    context_parts.append("\n【实体关系】")
-    for r in relationships:
-        src_id, tgt_id, rel_type, src_name, tgt_name = r
-        context_parts.append(f"- {src_name} --[{rel_type}]--> {tgt_name}")
-    
     return "\n".join(context_parts)
