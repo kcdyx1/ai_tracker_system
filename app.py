@@ -245,8 +245,12 @@ elif page == "📚 情报档案":
                     try:
                         attrs = json.loads(attr_str)
                         for k, v in attrs.items():
-                            # 将列表转换为逗号分隔的字符串，否则表格无法完美渲染
-                            p[k] = ", ".join(v) if isinstance(v, list) else str(v)
+                            if v is None or v == "None":
+                                p[k] = ""
+                            elif isinstance(v, list):
+                                p[k] = ", ".join(v)
+                            else:
+                                p[k] = str(v)
                     except:
                         pass
 
