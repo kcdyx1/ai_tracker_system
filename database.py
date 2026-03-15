@@ -63,7 +63,19 @@ def init_db() -> None:
             target_id TEXT NOT NULL,
             relation_type TEXT NOT NULL,
             start_date TEXT,
-            end_date TEXT
+            end_date TEXT,
+            -- 确保两个实体间的同种关系只能有一条
+            UNIQUE(source_id, target_id, relation_type)
+        )
+    """)
+    
+    # 任务队列表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS task_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT UNIQUE NOT NULL,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT NOT NULL
         )
     """)
     
@@ -109,10 +121,10 @@ def save_extraction_result(result: ExtractionResult) -> None:
             event.created_at.isoformat() if isinstance(event.created_at, datetime) else str(event.created_at)
         ))
     
-    # 保存关系
+    # 保存关系 (使用 INSERT OR IGNORE，如果唯一约束冲突则忽略)
     for rel in result.relationships:
         cursor.execute("""
-            INSERT OR REPLACE INTO relationships (source_id, target_id, relation_type, start_date, end_date)
+            INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type, start_date, end_date)
             VALUES (?, ?, ?, ?, ?)
         """, (
             rel.source_id,
@@ -210,3 +222,91 @@ if __name__ == "__main__":
     print("\n📊 查询所有实体:")
     for e in query_all_entities():
         print(f"  - {e['id']}: {e['name']} ({e['type']})")
+
+
+# ============================================================================
+# 任务队列函数
+# ============================================================================
+
+def push_task(url: str) -> bool:
+    """
+    将 URL 插入任务队列（状态为 pending）
+    使用 INSERT OR IGNORE 避免重复处理同一链接
+    返回是否成功加入
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT OR IGNORE INTO task_queue (url, status, created_at)
+            VALUES (?, 'pending', ?)
+        """, (url, datetime.now().isoformat()))
+        conn.commit()
+        # 判断是否成功插入（受影响行数 > 0 表示新插入）
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"❌ push_task 错误: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_pending_task() -> dict | None:
+    """
+    查找一条 status 为 'pending' 的任务
+    将其状态更新为 'processing'，并返回该任务的 id 和 url
+    注意使用事务防止并发冲突
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        # 使用事务确保原子性
+        cursor.execute("BEGIN EXCLUSIVE")
+        
+        # 查找一条 pending 任务
+        cursor.execute("""
+            SELECT id, url FROM task_queue
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        
+        if row:
+            task_id, url = row
+            # 更新状态为 processing
+            cursor.execute("""
+                UPDATE task_queue
+                SET status = 'processing'
+                WHERE id = ?
+            """, (task_id,))
+            conn.commit()
+            conn.close()
+            return {"id": task_id, "url": url}
+        
+        conn.commit()
+        conn.close()
+        return None
+    except Exception as e:
+        print(f"❌ get_pending_task 错误: {e}")
+        conn.close()
+        return None
+
+
+def update_task_status(task_id: int, status: str) -> None:
+    """
+    更新任务的最终状态（如 'completed' 或 'failed'）
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE task_queue
+            SET status = ?
+            WHERE id = ?
+        """, (status, task_id))
+        conn.commit()
+    except Exception as e:
+        print(f"❌ update_task_status 错误: {e}")
+    finally:
+        conn.close()

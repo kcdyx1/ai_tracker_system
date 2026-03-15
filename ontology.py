@@ -231,13 +231,6 @@ class TechConcept(Entity):
     }
 
 
-# 实体联合类型，供 AI 提取使用
-EntityUnion = Annotated[
-    Union[Company, Product, Person, TechConcept],
-    Field(discriminator="entity_type")
-]
-
-
 # ============================================================================
 # 事件模型 (Event Models)
 # ============================================================================
@@ -323,7 +316,7 @@ class ExtractionResult(BaseModel):
     - events: 提取到的事件
     - relationships: 提取到的实体关系
     """
-    entities: List[EntityUnion] = Field(description="提取到的所有实体")
+    entities: List[Entity] = Field(description="提取到的所有实体")
     events: List[Event] = Field(description="提取到的事件")
     relationships: List[Relationship] = Field(description="提取到的实体关系")
     

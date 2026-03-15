@@ -6,3 +6,10 @@ instructor
 anthropic
 streamlit
 pandas
+
+# Web 服务依赖
+fastapi
+uvicorn
+requests
+feedparser
+schedule

@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import json
+import requests
 from pathlib import Path
 from datetime import datetime
 
@@ -200,6 +201,34 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("数据更新于: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    # ========== 知识空投区 ==========
+    st.markdown("---")
+    st.subheader("📥 知识空投")
+    
+    url_input = st.text_input("粘贴文章链接", placeholder="https://...")
+    
+    if st.button("🚀 提交分析"):
+        if url_input:
+            if not url_input.startswith(("http://", "https://")):
+                st.error("❌ URL 必须是 http 或 https 开头")
+            else:
+                try:
+                    response = requests.post(
+                        "http://127.0.0.1:8000/api/ingest",
+                        json={"url": url_input},
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        st.success(f"✅ {result['message']}")
+                        st.info("💡 后台正在处理，请稍后刷新页面查看结果")
+                    else:
+                        st.error(f"❌ 请求失败: {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"❌ 无法连接到 API 服务: {e}")
+        else:
+            st.warning("⚠️ 请输入链接")
 
 
 # ============================================================================
