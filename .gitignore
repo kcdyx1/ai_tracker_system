@@ -12,3 +12,5 @@ config/*.yml
 config/*.json
 # 依赖包（根据项目类型选择）
 venv/
+reports/
+config/
