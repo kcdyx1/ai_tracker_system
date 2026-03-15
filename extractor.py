@@ -79,7 +79,8 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
    - 技术概念 (TechConcept): 技术名称、类别
 
 2. 事件 (Events):
-   - 事件标题、发生时间、摘要
+   - 事件标题、发生时间 (date)、报道/发布时间 (published_date)、摘要
+   - 必须严格区分 date（事件真实发生的历史时间）和 published_date（这篇新闻报道发布的时间）。
 
 3. 关系 (Relationships):
    - 公司与产品: RELEASED (发布)

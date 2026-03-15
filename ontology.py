@@ -248,13 +248,15 @@ class Event(BaseNode):
     
     属性:
         title: 事件标题
-        date: 发生时间
+        date: 事件实际发生时间
+        published_date: 媒体报道时间
         source_url: 信息来源链接
         summary: 事件摘要
         involved_entity_ids: 参与此事件的实体ID列表
     """
     title: str = Field(..., description="事件标题")
-    date: datetime = Field(..., description="发生时间")
+    date: datetime = Field(..., description="事件实际发生时间（尽可能推断具体日期，若无具体日期可与报道时间一致）")
+    published_date: datetime = Field(..., description="媒体报道时间或文章发布时间")
     source_url: Optional[str] = Field(default=None, description="信息来源链接")
     summary: str = Field(default="", description="事件摘要")
     involved_entity_ids: List[str] = Field(default_factory=list, description="参与此事件的实体ID列表")
@@ -264,6 +266,7 @@ class Event(BaseNode):
             "example": {
                 "title": "OpenAI发布GPT-4",
                 "date": "2023-03-14T00:00:00",
+                "published_date": "2023-03-14T10:00:00",
                 "source_url": "https://openai.com/gpt-4",
                 "summary": "OpenAI正式发布GPT-4多模态大模型",
                 "involved_entity_ids": ["entity1", "entity2"]

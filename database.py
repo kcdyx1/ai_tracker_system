@@ -50,12 +50,19 @@ def init_db() -> None:
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             date TEXT NOT NULL,
+            published_date TEXT NOT NULL,
             involved_entities_json TEXT,
             summary TEXT,
             source_url TEXT,
             created_at TEXT NOT NULL
         )
     """)
+    
+    # 兼容旧数据：尝试添加 published_date 字段
+    try:
+        cursor.execute("ALTER TABLE events ADD COLUMN published_date TEXT")
+    except:
+        pass  # 字段已存在则忽略
     
     # 关系表
     cursor.execute("""
@@ -111,12 +118,13 @@ def save_extraction_result(result: ExtractionResult) -> None:
     # 保存事件
     for event in result.events:
         cursor.execute("""
-            INSERT OR REPLACE INTO events (id, title, date, involved_entities_json, summary, source_url, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO events (id, title, date, published_date, involved_entities_json, summary, source_url, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.id,
             event.title,
             event.date.isoformat() if isinstance(event.date, datetime) else str(event.date),
+            event.published_date.isoformat() if isinstance(event.published_date, datetime) else str(event.published_date),
             json.dumps(event.involved_entity_ids),
             event.summary,
             event.source_url,
