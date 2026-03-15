@@ -301,7 +301,7 @@ def get_recent_tasks(limit: int = 20) -> list:
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT id, url, status, created_at
+        SELECT *
         FROM task_queue
         ORDER BY id DESC
         LIMIT ?
