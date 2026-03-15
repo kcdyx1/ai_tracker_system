@@ -189,6 +189,35 @@ def query_entity_by_id(entity_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_recent_events(days: int = 7) -> list:
+    """
+    获取最近 N 天的事件
+    
+    Args:
+        days: 天数，默认 7 天
+        
+    Returns:
+        事件列表
+    """
+    from datetime import timedelta
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 计算日期边界
+    cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    # 查询 events 表中 published_date >= cutoff_date 的记录
+    cursor.execute("""
+        SELECT * FROM events
+        WHERE published_date >= ?
+        ORDER BY published_date DESC
+    """, (cutoff_date,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def verify_relationships_integrity() -> dict:
     """
     验证关系完整性：检查 relationships 中的 source_id 和 target_id 是否都存在于 entities 表中
