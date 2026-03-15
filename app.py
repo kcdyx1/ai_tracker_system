@@ -256,6 +256,67 @@ st.set_page_config(
 
 
 # ============================================================================
+# 任务队列监控函数
+# ============================================================================
+
+def get_task_queue_status() -> dict:
+    """
+    获取任务队列状态统计
+    
+    Returns:
+        包含 pending, processing, completed, failed 数量的字典
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    status_counts = {
+        "pending": 0,
+        "processing": 0,
+        "completed": 0,
+        "failed": 0
+    }
+    
+    for status in status_counts.keys():
+        cursor.execute(
+            "SELECT COUNT(*) FROM task_queue WHERE status = ?",
+            (status,)
+        )
+        status_counts[status] = cursor.fetchone()[0]
+    
+    conn.close()
+    return status_counts
+
+
+def get_recent_tasks(limit: int = 20) -> list:
+    """
+    获取最近的任务记录
+    
+    Args:
+        limit: 返回记录数量，默认 20
+        
+    Returns:
+        任务列表
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, url, status, created_at
+        FROM task_queue
+        ORDER BY id DESC
+        LIMIT ?
+    """, (limit,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [
+        {"id": row[0], "url": row[1], "status": row[2], "created_at": row[3]}
+        for row in rows
+    ]
+
+
+# ============================================================================
 # 侧边栏
 # ============================================================================
 
@@ -329,7 +390,7 @@ with st.sidebar:
 st.title("📡 AI & Data 产业追踪雷达")
 
 # 创建 Tab
-tab1, tab2, tab3 = st.tabs(["📅 产业时间线", "🔍 实体探索器", "🕸️ 动态关系图谱"])
+tab1, tab2, tab3 = st.tabs(["📅 产业时间线", "🔍 实体探索器", "⚙️ 系统监控"])
 
 # ============================================================================
 # Tab 1: 产业时间线
@@ -534,6 +595,41 @@ with tab3:
             # 渲染图谱
             st.markdown(f"**节点数: {len(nodes)} | 边数: {len(edges)}**")
             agraph(nodes=nodes, edges=edges, config=config)
+
+
+# ============================================================================
+# Tab 3: 系统监控
+# ============================================================================
+
+with tab3:
+    st.header("⚙️ 后台任务监控")
+    
+    # 刷新按钮
+    if st.button("🔄 刷新状态"):
+        st.rerun()
+    
+    # 获取任务状态
+    status = get_task_queue_status()
+    
+    # 展示状态卡片
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("⏳ 排队中", status["pending"])
+    with col2:
+        st.metric("🔄 处理中", status["processing"])
+    with col3:
+        st.metric("✅ 已完成", status["completed"])
+    with col4:
+        st.metric("❌ 失败", status["failed"])
+    
+    # 展示最近任务列表
+    st.markdown("### 📋 最近任务")
+    tasks = get_recent_tasks(20)
+    if tasks:
+        df = pd.DataFrame(tasks)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("暂无任务记录")
 
 
 # ============================================================================
