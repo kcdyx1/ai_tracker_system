@@ -47,9 +47,9 @@ def parse_feed(feed_url: str) -> list:
             print(f"  ⚠️ Feed 无内容: {feed_url}")
             return []
         
-        # 获取最新 3 篇文章
+        # 获取最新 10 篇文章
         articles = []
-        for entry in feed.entries[:3]:
+        for entry in feed.entries[:10]:
             if hasattr(entry, 'link'):
                 articles.append(entry.link)
         
