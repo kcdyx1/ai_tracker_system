@@ -6,6 +6,9 @@ AI 提取引擎 (AI Extraction Engine)
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import json
 from typing import List, Optional
 from datetime import datetime

@@ -7,6 +7,9 @@ AI Tracker System - FastAPI 服务端
 
 import asyncio
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from contextlib import asynccontextmanager
 from typing import Optional
 

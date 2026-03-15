@@ -11,6 +11,8 @@ import json
 import requests
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
     from streamlit_agraph import agraph, Node, Edge, Config
@@ -31,6 +33,7 @@ def get_connection():
 # ============================================================================
 # 数据读取函数
 # ============================================================================
+@st.cache_data(ttl=60)
 def get_summary_stats():
     conn = get_connection()
     cursor = conn.cursor()
@@ -50,6 +53,7 @@ def get_summary_stats():
     conn.close()
     return stats
 
+@st.cache_data(ttl=60)
 def get_all_entities():
     conn = get_connection()
     cursor = conn.cursor()
@@ -58,6 +62,7 @@ def get_all_entities():
     conn.close()
     return [dict(row) for row in rows]
 
+@st.cache_data(ttl=60)
 def get_latest_events(limit: int = 20):
     conn = get_connection()
     cursor = conn.cursor()

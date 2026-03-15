@@ -8,6 +8,7 @@ streamlit
 streamlit-agraph
 pandas
 cloudscraper
+python-dotenv
 
 # Web 服务依赖
 fastapi

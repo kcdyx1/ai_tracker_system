@@ -6,6 +6,9 @@ AI Tracker System - Graph-RAG 引擎
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import anthropic
 from database import get_rag_context
 

@@ -10,6 +10,9 @@ AI Tracker System - 智能报告生成与推送模块
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
