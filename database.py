@@ -59,6 +59,13 @@ def init_db() -> None:
     """)
     
     # 兼容旧数据：尝试添加 published_date 字段
+    
+    # 兼容旧数据：尝试添加 attributes_json 字段用于弹性存储
+    try:
+        cursor.execute("ALTER TABLE entities ADD COLUMN attributes_json TEXT")
+    except:
+        pass  # 字段已存在则忽略
+
     try:
         cursor.execute("ALTER TABLE events ADD COLUMN published_date TEXT")
     except:
@@ -110,16 +117,22 @@ def save_extraction_result(result: ExtractionResult) -> None:
         # 获取实体类型
         entity_type = entity.entity_type.value if hasattr(entity.entity_type, 'value') else str(entity.entity_type)
         
+        # 提取基类之外的弹性属性
+        entity_dict = entity.model_dump()
+        base_keys = {'id', 'entity_type', 'name', 'aliases', 'description', 'created_at'}
+        attributes = {k: v for k, v in entity_dict.items() if k not in base_keys and v is not None and v != []}
+
         cursor.execute("""
-            INSERT OR REPLACE INTO entities (id, type, name, aliases_json, description, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO entities (id, type, name, aliases_json, description, created_at, attributes_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             entity.id,
             entity_type,
             entity.name,
             json.dumps(entity.aliases),
             entity.description,
-            entity.created_at.isoformat() if isinstance(entity.created_at, datetime) else str(entity.created_at)
+            entity.created_at.isoformat() if isinstance(entity.created_at, datetime) else str(entity.created_at),
+            json.dumps(attributes, ensure_ascii=False)
         ))
     
     # 保存事件

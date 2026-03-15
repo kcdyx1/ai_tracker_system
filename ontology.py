@@ -169,23 +169,32 @@ class Company(Entity):
 
 
 class Product(Entity):
-    """
-    产品实体
-    
-    属性:
-        product_type: 产品类型
-        company_id: 所属公司ID
-    """
+    """产品实体 (包含深度AI特征)"""
     entity_type: Literal["product"] = Field(default="product", description="实体类型")
     product_type: ProductType = Field(..., description="产品类型")
     company_id: Optional[str] = Field(default=None, description="所属公司ID")
-    
+
+    # 深度特征字段
+    is_open_source: Optional[bool] = Field(default=None, description="是否开源")
+    license_type: Optional[str] = Field(default=None, description="开源协议(如Apache 2.0)")
+    parameters_size: Optional[str] = Field(default=None, description="参数量级(如7B, 1.5T)")
+    architecture: Optional[str] = Field(default=None, description="模型架构(如MoE, Transformer)")
+    context_window: Optional[str] = Field(default=None, description="上下文窗口(如128k, 1M)")
+    modalities: List[str] = Field(default_factory=list, description="支持模态(文本/图像/视频等)")
+    supported_languages: List[str] = Field(default_factory=list, description="支持语言")
+    base_model: Optional[str] = Field(default=None, description="底层依赖的基础模型")
+    pricing_model: Optional[str] = Field(default=None, description="商业模式/定价机制")
+    deployment_options: List[str] = Field(default_factory=list, description="部署方式(公有云/私有化/端侧)")
+    paper_url: Optional[str] = Field(default=None, description="相关论文链接")
+    github_url: Optional[str] = Field(default=None, description="开源代码仓库链接")
+
     model_config = {
         "json_schema_extra": {
             "example": {
-                "name": "Claude",
+                "name": "Claude 3.5 Sonnet",
                 "product_type": "大模型",
-                "company_id": "550e8400-e29b-41d4-a716-446655440000"
+                "context_window": "200k",
+                "modalities": ["文本", "图像"]
             }
         }
     }

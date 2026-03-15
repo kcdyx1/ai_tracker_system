@@ -77,7 +77,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 
 1. 实体 (Entities):
    - 公司 (Company): 公司名称、成立年份、官网、状态
-   - 产品 (Product): 产品名称、类型、所属公司
+   - 产品 (Product): 除名称、类型、所属公司外，【必须极力深挖】以下 AI 特征：是否开源(is_open_source)、参数量级(parameters_size)、上下文窗口(context_window)、架构(architecture)、支持模态(modalities)、底座模型(base_model)、定价模式(pricing_model)和部署方式(deployment_options)。
    - 人物 (Person): 人名、职位
    - 技术概念 (TechConcept): 技术名称、类别
 
