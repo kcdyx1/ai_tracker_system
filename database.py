@@ -84,9 +84,16 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE NOT NULL,
             status TEXT DEFAULT 'pending',
+            error_message TEXT,
             created_at TEXT NOT NULL
         )
     """)
+    
+    # 兼容旧数据：尝试添加 error_message 字段
+    try:
+        cursor.execute("ALTER TABLE task_queue ADD COLUMN error_message TEXT")
+    except:
+        pass  # 字段已存在则忽略
     
     conn.commit()
     conn.close()
@@ -332,18 +339,23 @@ def get_pending_task() -> dict | None:
         return None
 
 
-def update_task_status(task_id: int, status: str) -> None:
+def update_task_status(task_id: int, status: str, error_msg: str = None) -> None:
     """
     更新任务的最终状态（如 'completed' 或 'failed'）
+    
+    Args:
+        task_id: 任务ID
+        status: 新状态
+        error_msg: 错误信息（可选）
     """
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             UPDATE task_queue
-            SET status = ?
+            SET status = ?, error_message = ?
             WHERE id = ?
-        """, (status, task_id))
+        """, (status, error_msg, task_id))
         conn.commit()
     except Exception as e:
         print(f"❌ update_task_status 错误: {e}")

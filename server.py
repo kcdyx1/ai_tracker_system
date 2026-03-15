@@ -106,7 +106,7 @@ async def background_worker():
                     
                 except Exception as e:
                     # 标记任务失败
-                    update_task_status(task_id, "failed")
+                    update_task_status(task_id, "failed", str(e))
                     print(f"  ❌ 任务 #{task_id} 失败: {e}")
             else:
                 # 没有待处理任务，短暂休眠
