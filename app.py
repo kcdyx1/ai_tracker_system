@@ -307,10 +307,7 @@ def get_recent_tasks(limit: int = 20) -> list:
     rows = cursor.fetchall()
     conn.close()
     
-    return [
-        {"id": row[0], "url": row[1], "status": row[2], "created_at": row[3]}
-        for row in rows
-    ]
+    return [dict(row) for row in rows]
 
 
 # ============================================================================
