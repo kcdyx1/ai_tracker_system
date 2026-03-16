@@ -72,7 +72,7 @@
 
 ### 1. 克隆阵地
 ```bash
-git clone [https://github.com/YourUsername/ai-tracker-system.git](https://github.com/YourUsername/ai-tracker-system.git)
+git clone https://github.com/kcdyx1/ai_tracker_system.git
 cd ai-tracker-system
 ```
 ### 2. 配置环境密钥
