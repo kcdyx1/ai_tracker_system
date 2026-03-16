@@ -4,6 +4,7 @@
 *.tmp
 temp/
 data/
+reports/
 cache/
 __pycache__/
 *.db
@@ -15,3 +16,19 @@ config/*.json
 venv/
 reports/
 config/
+# Python 忽略项
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+
+# 数据库与上传文件 (保护私有情报)
+data/
+*.db
+*.sqlite3
+
+# 前端 Node 忽略项
+frontend/node_modules/
+.DS_Store
