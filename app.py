@@ -437,6 +437,22 @@ elif page == "📇 实体全息档案":
             st.metric("核心分类", ent['type'].upper())
             st.caption(f"系统收录时间: {ent['created_at'][:10]}")
             
+            # ⚡️ 呼叫侦察兵按钮 (仅针对产品类型开放)
+            if ent['type'] == 'product':
+                if st.button("⚡️ 呼叫侦察兵 (全网补全)", type="primary", use_container_width=True):
+                    with st.spinner("🕵️‍♂️ 侦察兵已出动，正在全网搜索技术文档与参数... (约需 10-20 秒)"):
+                        try:
+                            res = requests.post(f"http://127.0.0.1:8000/api/enrich/{ent['id']}", timeout=40)
+                            if res.status_code == 200:
+                                st.success(f"✅ {res.json().get('message')}")
+                                # 清除缓存并刷新页面以显示新数据
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"❌ 侦察失败: {res.json().get('detail')}")
+                        except Exception as e:
+                            st.error(f"❌ API 调用异常: {e}")
+            
         # --- 中部：深度特征解析 ---
         if ent.get('attributes_json') and ent['attributes_json'] != "null":
             try:

@@ -155,7 +155,7 @@ def save_extraction_result(result: ExtractionResult) -> None:
     for rel in result.relationships:
         cursor.execute("""
             INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type, start_date, end_date)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             rel.source_id,
             rel.target_id,

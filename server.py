@@ -57,9 +57,10 @@ async def lifespan(app: FastAPI):
         print(f"⚠️ 僵尸任务重置失败: {e}")
     # ------------------------------
     
-    # 启动后台 Worker
-    print("🚀 启动后台 Worker...")
-    asyncio.create_task(background_worker())
+    # 启动后台 Worker (3 线程并发)
+    print("🚀 启动 3 个并发后台 Worker...")
+    for _ in range(3):
+        asyncio.create_task(background_worker())
     
     yield
     
@@ -123,9 +124,9 @@ async def background_worker():
                             raise Exception("网页抓取失败，返回内容为空")
                         print(f"  ✅ 抓取成功，内容长度: {len(content)} 字符")
                         
-                    # 长文本切片逻辑 (滑动窗口防切断)
-                    chunk_size = 4000
-                    overlap = 300
+                    # 长文本切片逻辑 (黄金比例：兼顾速度与召回率)
+                    chunk_size = 8000
+                    overlap = 400
                     chunks = []
                     start = 0
                     while start < len(content):
@@ -247,6 +248,25 @@ async def upload_document(file: UploadFile = File(...)):
             return {"status": "queued", "filename": file.filename, "url": file_url}
         else:
             return {"status": "already_exists"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# 实体侦察兵路由 (Enricher API)
+# ============================================================================
+from enricher import run_enrichment
+
+@app.post("/api/enrich/{entity_id}")
+async def force_enrich_entity(entity_id: str):
+    """手动触发侦察兵，全网扫描补全该实体的缺失参数"""
+    try:
+        # 侦察过程较长，放入线程池异步执行，但这里为了前端直接拿到结果，使用 await
+        result = await asyncio.to_thread(run_enrichment, entity_id)
+        if result["status"] == "success":
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result["message"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
