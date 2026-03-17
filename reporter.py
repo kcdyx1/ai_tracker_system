@@ -1,202 +1,169 @@
 #!/usr/bin/env python3
 """
-AI Tracker System - 智能报告生成与推送模块
+OSINT Tracker - 飞书高级战略简报推送引擎 (v4.0 旗舰版)
+修复超时问题，增加防误报熔断机制，强制显式绑定 MiniMax 接口。
 """
 
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
+import sys
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
-
+import sqlite3
 import requests
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 import anthropic
 
-from database import get_recent_events, query_entity_by_id
+# 1. 加载环境变量
+load_dotenv()
+FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
-# 配置
-REPORTS_DIR = Path(__file__).parent / "reports"
+# 2. 强制显式读取配置，配置默认备用 URL 防止遗漏
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# 如果 .env 没写，这里强制兜底到 MiniMax 的接口
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
 
-def build_report_context(days: int = 7) -> str:
-    events = get_recent_events(days)
+print(f"🔧 正在初始化客户端，目标接口: {ANTHROPIC_BASE_URL}")
+
+# 3. 显式实例化客户端，并增加超时时间（M2.5 的思维链可能需要较长时间）
+client = anthropic.Anthropic(
+    api_key=ANTHROPIC_API_KEY,
+    base_url=ANTHROPIC_BASE_URL,
+    timeout=120.0  # 强制 120 秒超时容忍度
+)
+
+def get_recent_intelligence(days):
+    """从数据库捞取情报（使用绝对路径）"""
+    db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
+    
+    if not os.path.exists(db_path):
+        print(f"⚠️ 致命错误：数据库文件不存在: {db_path}")
+        return []
+        
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    cursor.execute("""
+        SELECT title, summary, risk_level, sentiment, source_url 
+        FROM events 
+        WHERE created_at >= ? 
+        ORDER BY id DESC LIMIT 30
+    """, (time_threshold,))
+    
+    events = cursor.fetchall()
+    conn.close()
+    return events
+
+def generate_report_content(events, report_title):
+    """召唤 MiniMax-M2.5 撰写简报（失败则返回 None 触发熔断）"""
     if not events:
-        return "暂无近期事件数据"
-    
-    context_lines = [f"📅 最近 {days} 天的 AI 产业重大事件：\n"]
-    for event in events:
-        try:
-            event_date = datetime.fromisoformat(event.get("date", "")).strftime("%Y-%m-%d")
-        except:
-            event_date = event.get("date", "未知")
-        
-        try:
-            pub_date = datetime.fromisoformat(event.get("published_date", "")).strftime("%Y-%m-%d %H:%M")
-        except:
-            pub_date = event.get("published_date", "未知")
-        
-        entity_names = []
-        try:
-            entity_ids = json.loads(event.get("involved_entities_json", "[]"))
-            for eid in entity_ids:
-                entity = query_entity_by_id(eid)
-                if entity:
-                    entity_names.append(entity["name"])
-        except:
-            pass
-        
-        entities_str = " | ".join(entity_names) if entity_names else "无"
-        
-        line = f"- [{event_date}] {event.get('title', '无标题')}"
-        if event_date != pub_date:
-            line += f" (报道时间: {pub_date})"
-        line += f"\n  参与实体: {entities_str}"
-        if event.get("summary"):
-            line += f"\n  摘要: {event.get('summary', '')[:100]}..."
-        
-        context_lines.append(line)
-    return "\n".join(context_lines)
+        return f"📡 **{report_title}**：雷达静默，设定周期内未捕获到高价值产业情报。"
 
-def generate_ai_report(context: str, report_type: str = "周报") -> str:
-    api_key = os.environ.get("MINIMAX_API_KEY")
-    if not api_key:
-        raise ValueError("请设置环境变量 MINIMAX_API_KEY")
-    
-    client = anthropic.Anthropic(
-        api_key=api_key,
-        base_url="https://api.minimaxi.com/anthropic"
-    )
-    
+    context = "\n\n".join([
+        f"标题: {e[0]}\n摘要: {e[1]}\n风险: {e[2] or '无'}\n倾向: {e[3] or '中性'}" 
+        for e in events
+    ])
+
     system_prompt = f"""你是一个资深 AI 产业分析师。请根据提供的近期事件数据，写一份结构清晰、排版精美的 Markdown 格式行业{report_type}。
 
 必须包含：
-1. 核心动向总结
-2. 资本与融资
-3. 产品与技术发布
+1. 核心动向总结和战略研判
+2. 资本融资趋势
+3. 爆款产品与关键技术发布
 4. 关键人物动态
 
-请注意区分事件的真实发生时间与媒体报道时间，进行深度解读，不要流水账。"""
+请注意区分事件的真实发生时间与媒体报道时间，进行深度解读，事件讲清楚来龙去脉，观点要有深刻的洞察，不要流水账。【{report_title}】。
     
-    message = client.messages.create(
-        model="MiniMax-M2.5",
-        max_tokens=8000,
-        system=system_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": f"请根据以下数据生成报告：\n\n{context}"
-            }
-        ]
-    )
-    
-    final_text = ""
-    for block in message.content:
-        if getattr(block, "type", "") == "text":
-            final_text += block.text
-        elif hasattr(block, "text"):
-            final_text += block.text
-    
-    if not final_text:
-        return "⚠️ 报告生成失败：未能从大模型返回结果中提取出有效文本。"
-    return final_text
+    【🚨 飞书专属排版军规 - 极度重要 🚨】
+    1. 绝对禁止使用 Markdown 标题语法（严禁使用 #, ##, ###）。板块名称请直接使用【Emoji + 加粗】，例如：**🚗 智能出行板块**。
+    2. 绝对禁止使用 Markdown 分割线（严禁使用 --- 或 *** 或 --）。
+    3. 绝对禁止使用表格（严禁使用 |---|）。
+    4. 事件罗列必须使用无序列表 `- ` 配合加粗，格式如下：
+       - **小米释放调价预警**：雷军表示手机业务面临压力，行业预判上半年消费电子成本压力持续。
+       - **哈啰斥资收购永安行**：被视作借壳上市铺路，出行赛道整合加速。
+    5. 语言风格要像顶级咨询公司的简报，极其精炼，直击要害。
+    """
 
-def save_local_report(markdown_content: str, report_type: str = "周报") -> str:
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{date_str}_AI产业{report_type}.md"
-    filepath = REPORTS_DIR / filename
+    print(f"🧠 正在呼叫 MiniMax-M2.5 引擎生成【{report_title}】...")
     
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(markdown_content)
-    print(f"✅ 报告已保存到: {filepath}")
-    return str(filepath)
-
-def send_feishu_webhook(markdown_content: str, webhook_url: str) -> bool:
-    """发送飞书 Webhook 推送 (精美排版版)"""
-    import requests
     try:
-        elements = []
-        current_text = []
+        message = client.messages.create(
+            model="MiniMax-M2.5",
+            max_tokens=3000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": [{"type": "text", "text": f"请分析以下情报并严格按规范输出：\n\n{context}"}]}]
+        )
         
-        for line in markdown_content.split('\n'):
-            line_stripped = line.strip()
-            if line_stripped.startswith('# '):
-                current_text.append(f"**🔥 {line_stripped[2:].strip()}**\n")
-            elif line_stripped.startswith('## '):
-                if current_text and any(t.strip() for t in current_text):
-                    elements.append({"tag": "markdown", "content": "\n".join(current_text).strip()})
-                    current_text = []
-                elements.append({"tag": "hr"})
-                elements.append({"tag": "markdown", "content": f"**📌 {line_stripped[3:].strip()}**"})
-            elif line_stripped.startswith('### '):
-                current_text.append(f"\n**🔹 {line_stripped[4:].strip()}**")
-            elif line_stripped.startswith('#### '):
-                current_text.append(f"**{line_stripped[5:].strip()}**")
-            elif line_stripped == '---':
-                pass
-            else:
-                current_text.append(line)
+        final_text = ""
+        print("-" * 50)
+        for block in message.content:
+            if block.type == "thinking":
+                print(f"🤔 【思维链】:\n{block.thinking[:100]}...\n") # 终端里只截取前100字展示，防刷屏
+            elif block.type == "text":
+                final_text += block.text
+                print(f"📝 【文本生成完毕】")
+        print("-" * 50)
+        return final_text
         
-        if current_text and any(t.strip() for t in current_text):
-            elements.append({"tag": "markdown", "content": "\n".join(current_text).strip()})
-
-        payload = {
-            "msg_type": "interactive",
-            "card": {
-                "config": {"wide_screen_mode": True},
-                "header": {
-                    "title": {"tag": "plain_text", "content": "📡 AI 产业情报雷达"},
-                    "template": "blue"
-                },
-                "elements": elements[:50]
-            }
-        }
-        
-        response = requests.post(webhook_url, json=payload, timeout=10)
-        if response.status_code == 200:
-            print("✅ 飞书精美卡片推送成功")
-            return True
-        else:
-            print(f"❌ 飞书推送失败: {response.status_code} - {response.text}")
-            return False
     except Exception as e:
-        print(f"❌ 飞书推送异常: {e}")
-        return False
+        print(f"❌ 大模型调用致命失败: {e}")
+        return None # ⚠️ 核心修复：失败直接返回 None，触发底下的熔断保护
 
-def main(days: int = 7, report_type: str = "周报"):
-    print("=" * 50)
-    print(f"🚀 开始生成 AI 产业 {report_type}")
-    print("=" * 50)
-    
-    print("\n📥 步骤 1: 获取近期事件数据...")
-    context = build_report_context(days)
-    print(f"   获取到上下文长度: {len(context)} 字符")
-    
-    print("\n🤖 步骤 2: 调用大模型生成报告...")
-    report = generate_ai_report(context, report_type)
-    print(f"   报告长度: {len(report)} 字符")
-    
-    print("\n💾 步骤 3: 保存本地报告...")
-    filepath = save_local_report(report, report_type)
-    
-    webhook_url = os.environ.get("FEISHU_WEBHOOK_URL")
-    if webhook_url:
-        print("\n📢 步骤 4: 飞书推送...")
-        send_feishu_webhook(report, webhook_url)
-    else:
-        print("\n⏭️ 步骤 4: 跳过飞书推送（未配置 FEISHU_WEBHOOK_URL）")
-    
-    print("\n" + "=" * 50)
-    print("🎉 报告生成完成!")
-    print("=" * 50)
-    return filepath
+def send_feishu_card(markdown_content, title_text):
+    """发送飞书高级交互式卡片"""
+    if not FEISHU_WEBHOOK_URL:
+        print("❌ 错误: 未配置 FEISHU_WEBHOOK_URL")
+        return
+
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True, "enable_forward": True},
+            "header": {
+                "template": "blue",
+                "title": {"content": f"⚡️ 产业追踪雷达 | {title_text}", "tag": "plain_text"}
+            },
+            "elements": [
+                {"tag": "markdown", "content": markdown_content},
+                {"tag": "hr"},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"🤖 MiniMax-M2.5 驱动 | 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"}]}
+            ]
+        }
+    }
+
+    print(f"🚀 正在向指挥部推送【{title_text}】...")
+    try:
+        response = requests.post(FEISHU_WEBHOOK_URL, headers={'Content-Type': 'application/json'}, json=payload)
+        response.raise_for_status()
+        print(f"✅ 推送成功！飞书响应: {response.json().get('msg')}")
+    except Exception as e:
+        print(f"❌ 推送失败: {e}")
 
 if __name__ == "__main__":
-    import sys
-    days = 7
-    report_type = "周报"
+    report_type = "daily"
     if len(sys.argv) > 1:
-        days = int(sys.argv[1])
-    if len(sys.argv) > 2:
-        report_type = sys.argv[2]
-    main(days=days, report_type=report_type)
+        report_type = sys.argv[1].lower()
+
+    config = {
+        "daily": {"days": 1, "title": "每日战略简报"},
+        "weekly": {"days": 7, "title": "每周深度内参"},
+        "monthly": {"days": 30, "title": "月度产业观察"}
+    }
+    
+    selected_config = config.get(report_type, config["daily"])
+    days = selected_config["days"]
+    title = selected_config["title"]
+
+    # 这里为了测试不断网，可以先强制传 7，或者你在终端跑 python reporter.py weekly
+    raw_events = get_recent_intelligence(days=days)
+    if raw_events:
+        print(f"📊 {title}：捞取到过去 {days} 天内的 {len(raw_events)} 条情报...")
+        report = generate_report_content(raw_events, title)
+        
+        # 🛡️ 熔断机制：如果报告生成成功才推送
+        if report:
+            send_feishu_card(report, title)
+        else:
+            print("🛑 报告生成异常，为防止发送错误信息，已自动熔断并取消飞书推送。")
+    else:
+        print(f"📭 过去 {days} 天无新增情报，取消推送。")
