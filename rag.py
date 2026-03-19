@@ -49,7 +49,7 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
         )
         
         response = client.messages.create(
-            model="MiniMax-M2.5",
+            model="MiniMax-M2.7",
             max_tokens=4000,
             temperature=0.2,  # 降低温度，保持冷酷的逻辑推理，减少幻觉
             system=system_prompt,

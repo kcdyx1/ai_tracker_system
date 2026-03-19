@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, ExternalLink, AlertTriangle, TrendingUp, Maximize2, Send, Bot, UploadCloud, Link, FileText, CheckCircle2, XCircle, Clock, Loader2 } from 'lucide-react'
+import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap } from 'lucide-react'
 import axios from 'axios'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
@@ -11,7 +11,6 @@ interface Stats { entity_count: number; event_count: number; relationship_count:
 interface Task { id: number; url: string; status: string; error_message: string; created_at: string; }
 interface EventItem { id: string; title: string; date: string; summary: string; risk_level: string | null; sentiment: string | null; source_url: string | null; }
 interface EntityItem { id: string; type: string; name: string; description: string; attributes_json: string; created_at: string; }
-interface GraphData { nodes: any[]; links: any[] }
 interface ChatMessage { role: 'user' | 'assistant'; content: string; }
 
 // ============================================================================
@@ -84,8 +83,8 @@ const OpsCenter = () => {
       
       {/* 核心大盘数字 */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        {[ { label: "总实体数", value: stats?.entity_count, icon: <Database className="w-5 h-5 text-teal-400" /> }, { label: "总事件数", value: stats?.event_count, icon: <Activity className="w-5 h-5 text-emerald-400" /> }, { label: "总关系数", value: stats?.relationship_count, icon: <Network className="w-5 h-5 text-indigo-400" /> }, { label: "收录公司", value: stats?.company_count, icon: <Building2 className="w-5 h-5 text-amber-400" /> }, { label: "收录产品", value: stats?.product_count, icon: <Package className="w-5 h-5 text-rose-400" /> } ].map((item, idx) => (
-          <div key={idx} className="relative group overflow-hidden backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-6 transition-all hover:-translate-y-1 hover:border-teal-500/30 hover:shadow-[0_8px_30px_rgb(20,184,166,0.12)]">
+        {[ { label: "总实体数", value: stats?.entity_count, icon: <Database className="w-5 h-5 text-teal-400" /> }, { label: "总事件数", value: stats?.event_count, icon: <Activity className="w-5 h-5 text-emerald-400" /> }, { label: "总关系数", value: stats?.relationship_count, icon: <Network className="w-5 h-5 text-indigo-400" /> }, { label: "收录公司", value: stats?.company_count, icon: <Building2 className="w-5 h-5 text-amber-400" /> }, { label: "收录产品", value: stats?.product_count, icon: <Package className="w-5 h-5 text-rose-400" /> } ].map((item) => (
+          <div key={item.label} className="relative group overflow-hidden backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-6 transition-all hover:-translate-y-1 hover:border-teal-500/30 hover:shadow-[0_8px_30px_rgb(20,184,166,0.12)]">
             <div className="flex justify-between items-start mb-4"><p className="text-sm font-medium text-slate-400">{item.label}</p>{item.icon}</div>
             <p className="text-3xl font-bold text-slate-100 font-mono">{loading ? "..." : (item.value || 0).toLocaleString()}</p>
           </div>
@@ -155,12 +154,6 @@ const OpsCenter = () => {
 }
 
 // ============================================================================
-// 下面组件 2、3、4 完全保持不变 (直接接上)
-// ============================================================================
-// ============================================================================
-// 组件 2: 📚 情报大盘 (Intelligence Dashboard) - 满血修复版
-// ============================================================================
-// ============================================================================
 // 组件 2: 📚 情报大盘 (Intelligence Dashboard) - 火力全开满血版
 // ============================================================================
 const IntelligenceDashboard = () => {
@@ -168,17 +161,29 @@ const IntelligenceDashboard = () => {
   const [entities, setEntities] = useState<EntityItem[]>([])
   const [subTab, setSubTab] = useState<'timeline'|'company'|'product'|'person'|'tech_concept'>('timeline')
   const [loading, setLoading] = useState(true)
+  
+  const [searchTerm, setSearchTerm] = useState('')
+  const [selectedItem, setSelectedItem] = useState<any>(null)
+  const [itemType, setItemType] = useState<'event' | 'entity'>('event')
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [evRes, entRes] = await Promise.all([axios.get('/api/events'), axios.get('/api/entities')])
-        setEvents(evRes.data)
-        setEntities(entRes.data)
-      } catch (error) { console.error(error) } finally { setLoading(false) }
-    }
-    loadData()
-  }, [])
+  // 💡 补全 1：侧边栏深度拉取状态
+  const [detailsLoading, setDetailsLoading] = useState(false)
+  const [nodeDetails, setNodeDetails] = useState<any>(null)
+
+  // 💡 补全 2：实时侦察兵浮窗状态
+  const [scoutModalOpen, setScoutModalOpen] = useState(false)
+  const [scoutUrl, setScoutUrl] = useState('')
+  const [scoutLoading, setScoutLoading] = useState(false)
+
+  const loadData = async () => {
+    try {
+      const [evRes, entRes] = await Promise.all([axios.get('/api/events'), axios.get('/api/entities')])
+      setEvents(evRes.data)
+      setEntities(entRes.data)
+    } catch (error) { console.error(error) } finally { setLoading(false) }
+  }
+
+  useEffect(() => { loadData() }, [])
 
   const parseJson = (str: string) => { 
     if (!str) return {};
@@ -198,27 +203,93 @@ const IntelligenceDashboard = () => {
     if (!risk && !sentiment) return null;
     return (
       <div className="flex gap-2 mt-2">
-        {risk === '高危' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30"><AlertTriangle className="w-3 h-3 mr-1"/>高危预警</span>}
-        {risk === '中风险' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30">中度风险</span>}
-        {sentiment === '利好' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"><TrendingUp className="w-3 h-3 mr-1"/>商业利好</span>}
-        {sentiment === '利空' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30">商业利空</span>}
+        {risk === '高危' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30"><AlertTriangle className="w-3 h-3 mr-1"/>高危</span>}
+        {risk === '中风险' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30">中风险</span>}
+        {sentiment === '利好' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"><TrendingUp className="w-3 h-3 mr-1"/>利好</span>}
+        {sentiment === '利空' && <span className="flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400 border border-rose-500/30">利空</span>}
       </div>
     )
   }
 
-  // 辅助函数：安全渲染数组或字符串
   const renderAttr = (val: any) => Array.isArray(val) ? val.join(', ') : String(val);
 
+  const filteredEvents = events.filter(e => 
+    e.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (e.summary && e.summary.toLowerCase().includes(searchTerm.toLowerCase()))
+  )
+
+  const filteredEntities = entities.filter(e => 
+    e.type === subTab && 
+    (e.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (e.description && e.description.toLowerCase().includes(searchTerm.toLowerCase())))
+  )
+
+  // 🚀 核心修复 1：打开实体档案时，向后端拉取全量事件流
+  const openDetail = async (item: any, type: 'event' | 'entity') => {
+    setSelectedItem(item);
+    setItemType(type);
+    if (type === 'entity') {
+      setNodeDetails(null);
+      setDetailsLoading(true);
+      try {
+        const res = await axios.get(`/api/entity/${item.id}`);
+        setNodeDetails(res.data);
+      } catch (e) {
+        console.error("档案调取失败", e);
+      } finally {
+        setDetailsLoading(false);
+      }
+    }
+  }
+
+  // 🚀 核心修复 2：激活实时侦察兵
+  const handleScoutSubmit = async () => {
+    if (!scoutUrl.trim()) return;
+    setScoutLoading(true);
+    try {
+      await axios.post('/api/ingest', { url: scoutUrl });
+      setScoutModalOpen(false);
+      setScoutUrl('');
+      // 可以在这里加个小提示，比如 Toast
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setScoutLoading(false);
+    }
+  }
+
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400">📚 情报大盘 (Intelligence DB)</h1>
-        <p className="text-slate-400 mt-2">结构化情报流与全景资产库</p>
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6 relative h-full">
+      {/* 💅 修复版头：使用 xl:flex-row 和 whitespace-nowrap 防止标题换行 */}
+      <div className="flex flex-col xl:flex-row xl:justify-between xl:items-end gap-4">
+        <div className="shrink-0">
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 whitespace-nowrap">📚 情报大盘 (Intelligence DB)</h1>
+          <p className="text-slate-400 mt-2">结构化情报流与全景资产库</p>
+        </div>
+        
+        <div className="flex items-center gap-3 w-full xl:w-auto">
+          <div className="relative flex-1 xl:w-72">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500" />
+            <input 
+              type="text" 
+              placeholder="在当前维度搜索..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-900/50 border border-slate-700 rounded-full pl-10 pr-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 transition-colors"
+            />
+          </div>
+          <button 
+            onClick={() => setScoutModalOpen(true)}
+            className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-full transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)] shrink-0"
+          >
+            <Zap className="w-4 h-4 mr-2" /> 实时侦察
+          </button>
+        </div>
       </div>
 
       <div className="flex space-x-2 border-b border-slate-800 pb-px overflow-x-auto">
         {subTabs.map(tab => (
-          <button key={tab.id} onClick={() => setSubTab(tab.id as any)}
+          <button key={tab.id} onClick={() => {setSubTab(tab.id as any); setSearchTerm('');}}
             className={`flex items-center px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 whitespace-nowrap ${
               subTab === tab.id ? 'border-cyan-400 text-cyan-400 bg-cyan-400/10' : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
             }`}>
@@ -227,136 +298,406 @@ const IntelligenceDashboard = () => {
         ))}
       </div>
 
-      <div className="min-h-[500px]">
+      <div className="min-h-[500px] pb-10">
         {loading ? (
           <div className="flex h-64 items-center justify-center text-slate-500 animate-pulse">正在从数据库提取加密情报...</div>
         ) : (
           <>
-            {/* 1. 时间线 */}
+            {/* 时间线 */}
             {subTab === 'timeline' && (
               <div className="space-y-4">
-                {events.map(ev => (
-                  <div key={ev.id} className={`p-5 rounded-xl border backdrop-blur-sm transition-all hover:bg-slate-800/40 ${ev.risk_level === '高危' ? 'border-rose-500/30 bg-rose-950/10' : 'border-slate-800 bg-slate-900/30'}`}>
+                {filteredEvents.map(ev => (
+                  <div key={ev.id} onClick={() => openDetail(ev, 'event')} className={`group cursor-pointer p-5 rounded-xl border backdrop-blur-sm transition-all hover:bg-slate-800/60 hover:-translate-y-1 hover:shadow-lg ${ev.risk_level === '高危' ? 'border-rose-500/30 bg-rose-950/10' : 'border-slate-800 bg-slate-900/30'}`}>
                     <div className="flex justify-between items-start">
-                      <h3 className="text-lg font-semibold text-slate-200">{ev.title}</h3>
-                      <span className="text-xs font-mono text-slate-500">{ev.date.substring(0, 10)}</span>
+                      <h3 className="text-lg font-semibold text-slate-200 group-hover:text-cyan-300 transition-colors">{ev.title}</h3>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="text-xs font-mono text-slate-500">{ev.date.substring(0, 10)}</span>
+                        <Eye className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-all" />
+                      </div>
                     </div>
                     {renderL2Tags(ev.risk_level, ev.sentiment)}
-                    <p className="mt-3 text-sm text-slate-400 leading-relaxed">{ev.summary}</p>
-                    {ev.source_url && <a href={ev.source_url} target="_blank" rel="noreferrer" className="inline-flex items-center mt-3 text-xs text-cyan-400 hover:text-cyan-300"><ExternalLink className="w-3 h-3 mr-1" /> 溯源验证</a>}
+                    <p className="mt-3 text-sm text-slate-400 leading-relaxed line-clamp-2">{ev.summary}</p>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* 2. 产品库 (满血版：所有参数全景展示) */}
-            {subTab === 'product' && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {entities.filter(e => e.type === 'product').map(prod => {
-                  const attrs = parseJson(prod.attributes_json)
-                  return (
-                    <div key={prod.id} className="p-5 rounded-xl border border-slate-800 bg-slate-900/30 hover:border-cyan-500/30 transition-colors flex flex-col">
-                      <div className="flex justify-between items-start mb-3">
-                        <h3 className="text-lg font-bold text-cyan-300 flex items-center"><Package className="w-5 h-5 mr-2"/> {prod.name}</h3>
-                        <div className="flex gap-2">
-                          {attrs.is_open_source === true && <span className="px-2 py-0.5 rounded text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">开源</span>}
-                          {attrs.is_open_source === false && <span className="px-2 py-0.5 rounded text-xs bg-slate-700/50 text-slate-400 border border-slate-600">闭源</span>}
-                        </div>
-                      </div>
-                      
-                      <p className="text-sm text-slate-400 mb-5 line-clamp-2 leading-relaxed">{prod.description}</p>
-                      
-                      {/* ⚡️ 硬核参数网格 (动态拉取所有被隐藏的数据) */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs mb-4 flex-1">
-                        {attrs.parameters_size && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">参数量级</span><span className="font-mono text-slate-200">{attrs.parameters_size}</span></div>}
-                        {attrs.context_window && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">上下文窗口</span><span className="font-mono text-slate-200">{attrs.context_window}</span></div>}
-                        {attrs.architecture && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">模型架构</span><span className="font-mono text-slate-200">{attrs.architecture}</span></div>}
-                        {attrs.modalities && attrs.modalities.length > 0 && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">支持模态</span><span className="font-mono text-slate-200 truncate block" title={renderAttr(attrs.modalities)}>{renderAttr(attrs.modalities)}</span></div>}
-                        {attrs.base_model && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">底层依赖</span><span className="font-mono text-slate-200 truncate block" title={attrs.base_model}>{attrs.base_model}</span></div>}
-                        {attrs.pricing_model && <div className="p-2 rounded bg-slate-950/50 border border-slate-800"><span className="text-slate-500 block mb-1">商业模式</span><span className="font-mono text-slate-200 truncate block" title={attrs.pricing_model}>{attrs.pricing_model}</span></div>}
-                      </div>
-
-                      {/* 底部代码与协议链接 */}
-                      <div className="flex flex-wrap gap-4 mt-auto pt-3 border-t border-slate-800/50 text-xs">
-                        {attrs.github_url && <a href={attrs.github_url} target="_blank" rel="noreferrer" className="flex items-center text-slate-400 hover:text-cyan-400 transition-colors"><ExternalLink className="w-3 h-3 mr-1"/> GitHub</a>}
-                        {attrs.paper_url && <a href={attrs.paper_url} target="_blank" rel="noreferrer" className="flex items-center text-slate-400 hover:text-cyan-400 transition-colors"><ExternalLink className="w-3 h-3 mr-1"/> 论文文献</a>}
-                        {attrs.license_type && <span className="flex items-center text-slate-500"><AlertTriangle className="w-3 h-3 mr-1"/>协议: {attrs.license_type}</span>}
-                      </div>
+            {/* 实体库 */}
+            {['company', 'product', 'person', 'tech_concept'].includes(subTab) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {filteredEntities.map(ent => (
+                  <div key={ent.id} onClick={() => openDetail(ent, 'entity')} className="group cursor-pointer p-5 rounded-xl border border-slate-800 bg-slate-900/30 hover:bg-slate-800/60 hover:border-cyan-500/30 transition-all hover:-translate-y-1 flex flex-col h-48 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-cyan-500/10 to-transparent rounded-bl-full"></div>
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="text-lg font-bold text-slate-200 group-hover:text-cyan-300 transition-colors truncate pr-4">{ent.name}</h3>
+                      <Eye className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors shrink-0" />
                     </div>
-                  )
-                })}
-              </div>
-            )}
-
-            {/* 3. 公司、人物、技术库通用列表 (带扩展参数 Badge 标签) */}
-            {['company', 'person', 'tech_concept'].includes(subTab) && (
-              <div className="rounded-xl border border-slate-800 overflow-hidden">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-900/80 border-b border-slate-800 text-slate-400">
-                    <tr><th className="px-6 py-3 w-1/4">名称</th><th className="px-6 py-3 w-1/2">简介与扩展参数</th><th className="px-6 py-3 w-1/4">收录时间</th></tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50 bg-slate-900/30">
-                    {entities.filter(e => e.type === subTab).map(ent => {
-                      const attrs = parseJson(ent.attributes_json)
-                      // 翻译常用的扩展字段键名
-                      const keyMap: Record<string, string> = { founded_year: "成立", website: "官网", status: "状态", current_title: "现任职务", category: "技术分类" }
-                      
-                      return (
-                        <tr key={ent.id} className="hover:bg-slate-800/50 transition-colors">
-                          <td className="px-6 py-4 font-medium text-slate-200 align-top">{ent.name}</td>
-                          <td className="px-6 py-4 align-top">
-                            <div className="text-slate-400 leading-relaxed">{ent.description || '-'}</div>
-                            {/* ⚡️ 渲染所有扩展属性标签 */}
-                            <div className="flex flex-wrap gap-2 mt-3">
-                              {Object.entries(attrs).map(([k, v]) => {
-                                if (!v || v === 'null' || (Array.isArray(v) && v.length === 0)) return null;
-                                return (
-                                  <span key={k} className="inline-flex items-center px-2 py-1 rounded bg-slate-950 border border-slate-800 text-[11px] text-slate-300">
-                                    <span className="text-slate-500 mr-1">{keyMap[k] || k}:</span>
-                                    {k === 'website' ? <a href={String(v)} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">访问</a> : <span className="font-mono">{renderAttr(v)}</span>}
-                                  </span>
-                                )
-                              })}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-slate-500 font-mono text-xs align-top">{ent.created_at.substring(0, 10)}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-                {entities.filter(e => e.type === subTab).length === 0 && (
-                  <div className="p-8 text-center text-slate-500">此维度目前暂无相关数据入库。</div>
-                )}
+                    <p className="text-sm text-slate-400 line-clamp-3 leading-relaxed flex-1">{ent.description || '暂无简介'}</p>
+                    <div className="mt-4 pt-3 border-t border-slate-800/50 flex justify-between items-center text-xs">
+                       <span className="text-slate-500 font-mono">ID: {ent.id.substring(0, 8)}...</span>
+                       <span className="text-cyan-500/70 group-hover:text-cyan-400">查看绝密档案 &rarr;</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </>
         )}
       </div>
+
+      {/* 🚀 侧边栏：绝密档案详情页 (Drawer) */}
+      {selectedItem && (
+        <div className="fixed inset-y-0 right-0 w-full md:w-[500px] bg-slate-900/95 border-l border-slate-700/80 backdrop-blur-3xl p-6 md:p-8 overflow-y-auto z-50 shadow-[-20px_0_50px_rgba(0,0,0,0.5)] animate-in slide-in-from-right-8 duration-300">
+          <button onClick={() => setSelectedItem(null)} className="absolute top-6 right-6 text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full transition-colors z-10"><XCircle className="w-5 h-5"/></button>
+          
+          <div className="mt-4 animate-in fade-in duration-500">
+            {itemType === 'event' ? (
+              <>
+                <div className="mb-6">
+                  <span className="px-3 py-1 text-xs font-mono rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">L2 事件研判</span>
+                  <h2 className="text-2xl font-bold text-white mt-4 leading-snug">{selectedItem.title}</h2>
+                  <div className="flex items-center gap-4 mt-3 text-sm text-slate-400">
+                    <span className="flex items-center"><Calendar className="w-4 h-4 mr-1"/> {selectedItem.date.substring(0, 10)}</span>
+                    {selectedItem.source_url && <a href={selectedItem.source_url} target="_blank" rel="noreferrer" className="flex items-center text-cyan-400 hover:text-cyan-300"><Link className="w-4 h-4 mr-1"/> 原始信源</a>}
+                  </div>
+                </div>
+                <div className="space-y-6">
+                  <div>
+                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-cyan-500 rounded-sm mr-2"></span>执行摘要</h3>
+                     <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">{selectedItem.summary}</div>
+                  </div>
+                  {(selectedItem.risk_level || selectedItem.sentiment) && (
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-rose-500 rounded-sm mr-2"></span>机器战术标记</h3>
+                      {renderL2Tags(selectedItem.risk_level, selectedItem.sentiment)}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-6">
+                  <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">{String(selectedItem.type).toUpperCase()}</span>
+                  <h2 className="text-2xl font-bold text-white mt-4">{selectedItem.name}</h2>
+                  <p className="text-xs text-slate-500 font-mono mt-2">入库时间: {selectedItem.created_at.substring(0, 10)}</p>
+                </div>
+                
+                <div className="space-y-6">
+                  <div>
+                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-indigo-500 rounded-sm mr-2"></span>实体描述</h3>
+                     <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">{selectedItem.description || '暂无该实体的详细描述。'}</div>
+                  </div>
+                  
+                  {Object.keys(parseJson(selectedItem.attributes_json)).length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-amber-500 rounded-sm mr-2"></span>结构化参数</h3>
+                      <div className="grid grid-cols-2 gap-3">
+                        {Object.entries(parseJson(selectedItem.attributes_json)).map(([k, v]) => {
+                          if (!v || v === 'null' || (Array.isArray(v) && v.length === 0)) return null;
+                          return (
+                            <div key={k} className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                              <div className="text-[10px] text-slate-500 uppercase mb-1">{k.replace(/_/g, ' ')}</div>
+                              <div className="text-sm text-slate-200 truncate" title={renderAttr(v)}>{renderAttr(v)}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 🚀 补全 3：向后端拉取并渲染关联事件流 */}
+                  {detailsLoading ? (
+                    <div className="py-8 flex flex-col items-center justify-center text-slate-500">
+                      <Loader2 className="w-6 h-6 animate-spin mb-3 text-indigo-500"/>
+                      正在向下钻取底层关联线索...
+                    </div>
+                  ) : nodeDetails?.events?.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
+                        <span className="w-1 h-3 bg-pink-500 rounded-sm mr-2"></span> 关联事件轴 ({nodeDetails.events.length})
+                      </h3>
+                      <div className="space-y-4 relative before:absolute before:inset-0 before:ml-[11px] before:w-0.5 before:bg-slate-700">
+                        {nodeDetails.events.map((e: any) => (
+                          <div key={e.id} className="relative flex items-start gap-4 group">
+                             <div className="w-6 h-6 shrink-0 rounded-full bg-slate-900 border-2 border-slate-700 z-10 group-hover:border-cyan-500 transition-colors mt-1"></div>
+                             <div className="flex-1 bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 group-hover:border-cyan-500/30 transition-colors">
+                               <div className="text-[10px] text-slate-400 font-mono mb-1 flex justify-between">
+                                 {e.date.substring(0, 10)}
+                                 {e.risk_level && <span className="text-rose-400">{e.risk_level}</span>}
+                               </div>
+                               <div className="text-sm text-slate-200 leading-snug">{e.title}</div>
+                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 🚀 补全 4：实时侦察兵专属模态框 (Modal) */}
+      {scoutModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-full max-w-lg shadow-2xl scale-in-95 mx-4">
+             <h3 className="text-lg font-bold text-white mb-2 flex items-center"><Zap className="w-5 h-5 mr-2 text-cyan-400"/> 部署实时侦察兵</h3>
+             <p className="text-sm text-slate-400 mb-5 leading-relaxed">发现高价值线索？将新闻或研报 URL 交给侦察兵，后台引擎将自动剥离干扰信息、切片并提取结构化情报入库。</p>
+             <input 
+               type="text" 
+               value={scoutUrl} 
+               onChange={e => setScoutUrl(e.target.value)} 
+               placeholder="粘贴文章链接 (如 https://...)" 
+               className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 mb-6" 
+               autoFocus
+             />
+             <div className="flex justify-end gap-3">
+               <button onClick={() => setScoutModalOpen(false)} className="px-5 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors">放弃</button>
+               <button onClick={handleScoutSubmit} disabled={scoutLoading || !scoutUrl.trim()} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-xl flex items-center disabled:opacity-50 shadow-[0_0_15px_rgba(8,145,178,0.4)] transition-all">
+                 {scoutLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <Send className="w-4 h-4 mr-2"/>}
+                 {scoutLoading ? '正在潜入目标...' : '执行侦察'}
+               </button>
+             </div>
+          </div>
+        </div>
+      )}
+      
+      {/* 遮罩层 (点击关闭侧边栏) */}
+      {selectedItem && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40" onClick={() => setSelectedItem(null)}></div>
+      )}
     </div>
   )
 }
 
 const TacticalGraph = () => {
-  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] }); const [loading, setLoading] = useState(true); const fgRef = useRef<any>(null)
-  const colorMap: Record<string, string> = { company: '#3b82f6', product: '#ec4899', person: '#10b981', tech_concept: '#8b5cf6' }
-  useEffect(() => { const fetchGraph = async () => { try { const res = await axios.get('/api/graph'); setGraphData(res.data) } catch (error) { console.error(error) } finally { setLoading(false) } }; fetchGraph() }, [])
-  const drawNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => { const label = node.name; const fontSize = 12 / globalScale; const nodeColor = colorMap[node.type] || '#ffffff'; ctx.beginPath(); ctx.arc(node.x, node.y, 6, 0, 2 * Math.PI, false); ctx.fillStyle = nodeColor; ctx.shadowColor = nodeColor; ctx.shadowBlur = 10; ctx.fill(); ctx.shadowBlur = 0; ctx.font = `${fontSize}px Sans-Serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#e2e8f0'; ctx.fillText(label, node.x, node.y + 12); }, []);
+  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+  const [loading, setLoading] = useState(true);
+  
+  // 💡 新增状态：控制右侧档案面板
+  const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [nodeDetails, setNodeDetails] = useState<any>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  
+  const fgRef = useRef<any>(null);
+  
+  const colorMap: Record<string, string> = { 
+    company: '#3b82f6', product: '#ec4899', person: '#10b981', tech_concept: '#8b5cf6' 
+  };
+
+  useEffect(() => {
+    const fetchGraph = async () => {
+      try {
+        const res = await axios.get('/api/graph');
+        setGraphData(res.data);
+      } catch (error) {
+        console.error(error);
+      } finally { setLoading(false); }
+    };
+    fetchGraph();
+  }, []);
+
+  useEffect(() => {
+    if (fgRef.current && !loading && graphData.nodes.length > 0) {
+      fgRef.current.d3Force('charge').strength(-120); 
+      fgRef.current.d3Force('link').distance(60);    
+      fgRef.current.d3Force('center').strength(0.05); 
+    }
+  }, [graphData, loading]);
+
+  const drawNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const label = node.name || '未知';
+    const fontSize = Math.max(12 / globalScale, 4); 
+    const nodeColor = colorMap[node.type] || '#ffffff';
+    const nodeRadius = 5;
+
+    // 绘制光晕（如果被选中）
+    if (selectedNode && selectedNode.id === node.id) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, nodeRadius + 4, 0, 2 * Math.PI, false);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, nodeRadius, 0, 2 * Math.PI, false);
+    ctx.fillStyle = nodeColor;
+    ctx.fill();
+
+    if (globalScale < 0.8) return;
+
+    ctx.font = `${fontSize}px "Inter", "PingFang SC", sans-serif`;
+    const textWidth = ctx.measureText(label).width;
+    const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
+    const textY = node.y + nodeRadius + 4 + fontSize / 2; 
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(node.x - bckgDimensions[0] / 2, textY - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1], 4);
+    } else {
+      ctx.rect(node.x - bckgDimensions[0] / 2, textY - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+    }
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.fillText(label, node.x, textY);
+  }, [colorMap, selectedNode]);
+
+  // 💡 核心交互：点击节点时触发雷达锁定
+  const handleNodeClick = useCallback(async (node: any) => {
+    setSelectedNode(node);
+    setNodeDetails(null);
+    setDetailsLoading(true);
+    
+    // 物理引擎：镜头平滑推向被点击的节点
+    if (fgRef.current) {
+      fgRef.current.centerAt(node.x, node.y, 800);
+      fgRef.current.zoom(2.5, 800);
+    }
+
+    try {
+      const res = await axios.get(`/api/entity/${node.id}`);
+      setNodeDetails(res.data);
+    } catch (error) {
+      console.error("档案调取失败", error);
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
+
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 h-[calc(100vh-80px)] flex flex-col">
       <div className="mb-4 flex justify-between items-end">
-        <div><h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center"><Network className="w-8 h-8 mr-3 text-blue-400" />战术图谱 (Tactical Graph)</h1><p className="text-slate-400 mt-2">基于物理引力引擎的动态实体关系网</p></div>
-        <div className="flex gap-3 text-xs">{Object.entries(colorMap).map(([type, color]) => (<span key={type} className="flex items-center px-2 py-1 rounded-md bg-slate-900 border border-slate-800"><span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: color }}></span>{type.toUpperCase()}</span>))}</div>
+        <div>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center">
+             战术图谱 (Tactical Graph)
+          </h1>
+          <p className="text-slate-400 mt-2">点击任意实体调取高维情报档案</p>
+        </div>
+        <div className="flex gap-4 text-xs">
+          {Object.entries(colorMap).map(([type, color]) => (
+            <span key={type} className="flex items-center px-2 py-1 rounded-md bg-slate-800 border border-slate-700">
+              <span className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: color }}></span>
+              {type.toUpperCase()}
+            </span>
+          ))}
+        </div>
       </div>
-      <div className="flex-1 relative rounded-2xl overflow-hidden border border-slate-700/50 bg-[#020617] shadow-2xl">
-        {loading ? <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm z-10"><div className="flex flex-col items-center"><Network className="w-12 h-12 text-blue-500 animate-spin mb-4" /><p className="text-slate-400">正在构建引力场与节点连接...</p></div></div> : graphData.nodes.length === 0 ? <div className="absolute inset-0 flex items-center justify-center text-slate-500">暂无图谱数据，请先前往指挥中心摄入情报</div> : (
-          <><ForceGraph2D ref={fgRef} graphData={graphData} nodeCanvasObject={drawNode} nodePointerAreaPaint={(node, color, ctx) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(node.x, node.y, 8, 0, 2 * Math.PI, false); ctx.fill(); }} linkColor={() => 'rgba(148, 163, 184, 0.3)'} linkDirectionalArrowLength={3.5} linkDirectionalArrowRelPos={1} linkLabel="label" onEngineStop={() => fgRef.current?.zoomToFit(400, 50)} d3VelocityDecay={0.1} cooldownTicks={100} />
-            <div className="absolute bottom-4 right-4 bg-slate-900/80 backdrop-blur-md p-2 rounded-lg border border-slate-700 flex gap-2"><button onClick={() => fgRef.current?.zoomToFit(400, 50)} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors" title="重置视角"><Maximize2 className="w-5 h-5" /></button></div></>
+
+      {/* 图谱容器：设为 relative 以便固定侧边栏 */}
+      <div className="flex-1 relative rounded-2xl overflow-hidden border border-slate-700/50 bg-[#070b14] shadow-2xl">
+        {loading ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm z-10">
+            <p className="text-slate-400">正在构建关系网...</p>
+          </div>
+        ) : (
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={graphData}
+            nodeCanvasObject={drawNode}
+            linkColor={() => 'rgba(255, 255, 255, 0.2)'}
+            linkWidth={1}
+            linkDirectionalArrowLength={3.5}
+            linkDirectionalArrowRelPos={1}
+            nodeLabel={() => ''} 
+            onNodeHover={(node) => { document.body.style.cursor = node ? 'crosshair' : 'default'; }}
+            onNodeClick={handleNodeClick} // 绑定点击事件
+            linkCanvasObjectMode={() => 'after'}
+            linkCanvasObject={(link: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+              if (globalScale < 1.2) return;
+              const start = link.source; const end = link.target;
+              if (typeof start !== 'object' || typeof end !== 'object') return;
+              const label = link.label; if (!label) return;
+              const textPos = { x: start.x + (end.x - start.x) / 2, y: start.y + (end.y - start.y) / 2 };
+              const fontSize = Math.max(10 / globalScale, 3);
+              ctx.font = `${fontSize}px "Inter", "PingFang SC", sans-serif`;
+              const textWidth = ctx.measureText(label).width;
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+              ctx.fillRect(textPos.x - textWidth / 2 - 2, textPos.y - fontSize / 2 - 2, textWidth + 4, fontSize + 4);
+              ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+              ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+              ctx.fillText(label, textPos.x, textPos.y);
+            }}
+          />
         )}
+
+        {/* 🚀 全新情报档案侧边栏 (Drawer) */}
+        {selectedNode && (
+          <div className="absolute top-0 right-0 w-96 h-full bg-slate-900/95 border-l border-slate-700/80 backdrop-blur-2xl p-6 overflow-y-auto z-50 animate-in slide-in-from-right-8 duration-300 shadow-[-10px_0_30px_rgba(0,0,0,0.5)]">
+            <button 
+              onClick={() => setSelectedNode(null)} 
+              className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full transition-colors"
+            >✕</button>
+            
+            <h2 className="text-2xl font-bold text-white mb-2 pr-8">{selectedNode.name}</h2>
+            <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              {selectedNode.type.toUpperCase()}
+            </span>
+
+            {detailsLoading ? (
+              <div className="mt-12 flex flex-col items-center justify-center text-slate-500">
+                <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                正在调取机密档案...
+              </div>
+            ) : nodeDetails ? (
+              <div className="mt-8 space-y-8 animate-in fade-in duration-500">
+                {/* 档案描述 */}
+                <div>
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <span className="w-1 h-3 bg-indigo-500 rounded-sm"></span> 实体描述
+                  </h3>
+                  <p className="text-sm text-slate-300 leading-relaxed bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                    {nodeDetails.entity.description || '暂无详细描述信息。'}
+                  </p>
+                </div>
+
+                {/* 关联事件流 */}
+                {nodeDetails.events.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <span className="w-1 h-3 bg-pink-500 rounded-sm"></span> 关联事件 ({nodeDetails.events.length})
+                    </h3>
+                    <div className="space-y-3 relative before:absolute before:inset-0 before:ml-1.5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-700 before:to-transparent">
+                      {nodeDetails.events.map((e: any) => (
+                        <div key={e.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+                          <div className="bg-slate-800/80 p-3 rounded-lg border border-slate-700/50 hover:border-indigo-500/50 transition-colors w-full ml-6">
+                             <div className="flex items-center justify-between mb-1">
+                               <div className="text-[10px] text-slate-400 font-mono">{e.date.substring(0, 10)}</div>
+                               {e.risk_level && <span className="text-[10px] px-1.5 rounded bg-red-500/20 text-red-400">{e.risk_level}</span>}
+                             </div>
+                             <div className="text-sm text-slate-200 font-medium leading-snug">{e.title}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+               <div className="mt-8 text-red-400 text-sm">档案调取失败，请检查网络或后端日志。</div>
+            )}
+          </div>
+        )}
+
+        <div className="absolute bottom-4 right-4 bg-slate-900/80 backdrop-blur-md p-2 rounded-lg border border-slate-700 flex gap-2">
+          <button 
+            onClick={() => fgRef.current?.zoomToFit(400, 50)} 
+            className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+            title="聚焦全景"
+          >
+            🔍 全局居中
+          </button>
+        </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
 const CopilotChat = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: '指挥官您好，我是本系统的首席战略官。情报雷达已待命，请下达分析指令。' }])

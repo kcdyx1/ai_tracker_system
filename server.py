@@ -22,7 +22,8 @@ from pydantic import BaseModel
 
 from database import (
     init_db, push_task, get_pending_task, update_task_status,
-    save_extraction_result, get_connection, get_recent_events, query_all_entities
+    save_extraction_result, get_connection, get_recent_events, query_all_entities,
+    query_entity_by_id, get_events_for_entity
 )
 from extractor import extract_with_validation
 from ingestion import fetch_clean_markdown
@@ -39,13 +40,15 @@ async def lifespan(app: FastAPI):
     # 自愈：重置僵尸任务
     try:
         conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE task_queue SET status = 'pending' WHERE status = 'processing'")
-        reset_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-        if reset_count > 0:
-            print(f"🧹 自愈触发：已重置 {reset_count} 个僵尸任务")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE task_queue SET status = 'pending' WHERE status = 'processing'")
+            reset_count = cursor.rowcount
+            conn.commit()
+            if reset_count > 0:
+                print(f"🧹 自愈触发：已重置 {reset_count} 个僵尸任务")
+        finally:
+            conn.close()
     except Exception as e:
         print(f"⚠️ 僵尸任务重置失败: {e}")
         
@@ -109,7 +112,7 @@ app = FastAPI(title="AI Tracker System API", lifespan=lifespan)
 # 允许 React 跨域请求
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 开发环境允许所有来源
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -125,6 +128,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     history: list[ChatMessage] = []
+
 # ============================================================================
 # API 路由 (为 React 前端供货)
 # ============================================================================
@@ -132,38 +136,31 @@ class ChatRequest(BaseModel):
 async def get_dashboard_stats():
     """获取大盘统计数据"""
     conn = get_connection()
-    cursor = conn.cursor()
-    stats = {}
-    
-    cursor.execute("SELECT COUNT(*) FROM entities")
-    stats["entity_count"] = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM events")
-    stats["event_count"] = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM relationships")
-    stats["relationship_count"] = cursor.fetchone()[0]
-    
-    # 👇 这两行是之前遗漏的，补上后 React 就能亮起来了！
-    cursor.execute("SELECT COUNT(*) FROM entities WHERE type = 'company'")
-    stats["company_count"] = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM entities WHERE type = 'product'")
-    stats["product_count"] = cursor.fetchone()[0]
-    
-    conn.close()
-    return stats
-
+    try:
+        cursor = conn.cursor()
+        stats = {}
+        cursor.execute("SELECT COUNT(*) FROM entities")
+        stats["entity_count"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM events")
+        stats["event_count"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM relationships")
+        stats["relationship_count"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM entities WHERE type = 'company'")
+        stats["company_count"] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM entities WHERE type = 'product'")
+        stats["product_count"] = cursor.fetchone()[0]
+        return stats
+    finally:
+        conn.close()
 
 @app.get("/api/graph")
 async def get_graph_data(entity_id: str = None):
-    """获取图谱的节点(nodes)和连线(links)数据（带幽灵节点过滤引擎）"""
+    """获取图谱的节点(nodes)和连线(links)数据"""
+    conn = get_connection()
     try:
-        conn = get_connection()
         cursor = conn.cursor()
         nodes, links, entity_ids = [], [], set()
 
-        # 1. 查询连线 (拉取最新的 300 条动态关系)
         if entity_id:
             cursor.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE source_id = ? OR target_id = ? LIMIT 300", (entity_id, entity_id))
         else:
@@ -173,32 +170,28 @@ async def get_graph_data(entity_id: str = None):
             links.append({"source": row[0], "target": row[1], "label": row[2]})
             entity_ids.update([row[0], row[1]])
 
-        # 2. 查询真实存在的节点实体
         valid_node_ids = set()
         if entity_ids:
             placeholders = ','.join(['?'] * len(entity_ids))
             cursor.execute(f"SELECT id, name, type FROM entities WHERE id IN ({placeholders})", list(entity_ids))
             for row in cursor.fetchall():
                 nodes.append({"id": row[0], "name": row[1], "type": row[2]})
-                valid_node_ids.add(row[0])  # 记录存活的节点
+                valid_node_ids.add(row[0])
 
-        # 3. 🛡️ 极其重要的装甲：剔除掉不存在的“幽灵连线”
         valid_links = [
             link for link in links 
             if link["source"] in valid_node_ids and link["target"] in valid_node_ids
         ]
-
-        conn.close()
         return {"nodes": nodes, "links": valid_links}
-        
     except Exception as e:
         print(f"❌ 图谱 API 崩溃拦截: {e}")
         return {"nodes": [], "links": []}
-    
+    finally:
+        conn.close()
 
 @app.get("/api/events")
 async def get_events(limit: int = 30):
-    """获取最新事件流 (包含 L2 红绿灯标签)"""
+    """获取最新事件流"""
     return get_recent_events(days=30)[:limit]
 
 @app.get("/api/entities")
@@ -209,25 +202,41 @@ async def get_entities():
 @app.get("/api/tasks")
 async def get_tasks():
     """获取引擎监控任务队列"""
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT id, url, status, error_message, created_at FROM task_queue ORDER BY id DESC LIMIT 20")
-    tasks = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return tasks
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, url, status, error_message, created_at FROM task_queue ORDER BY id DESC LIMIT 20")
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
-from database import get_connection
+@app.get("/api/entity/{entity_id}")
+async def get_entity_details(entity_id: str):
+    """精准调取单体档案及关联情报"""
+    try:
+        entity = query_entity_by_id(entity_id)
+        if not entity:
+            raise HTTPException(status_code=404, detail="实体档案不存在")
+
+        # 捞取与该实体相关的最新 10 条事件
+        events = get_events_for_entity(entity_id)
+        return {"entity": entity, "events": events[:10]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/task_stats")
 async def get_task_stats():
     """获取任务队列的全局统计"""
     conn = get_connection()
-    cursor = conn.cursor()
-    status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0}
-    for status in status_counts.keys():
-        cursor.execute("SELECT COUNT(*) FROM task_queue WHERE status = ?", (status,))
-        status_counts[status] = cursor.fetchone()[0]
-    conn.close()
-    return status_counts
+    try:
+        cursor = conn.cursor()
+        status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0}
+        for status in status_counts.keys():
+            cursor.execute("SELECT COUNT(*) FROM task_queue WHERE status = ?", (status,))
+            status_counts[status] = cursor.fetchone()[0]
+        return status_counts
+    finally:
+        conn.close()
 
 @app.post("/api/ingest")
 async def ingest_url(request: IngestRequest):
@@ -258,18 +267,12 @@ async def force_enrich_entity(entity_id: str):
         raise HTTPException(status_code=400, detail=result["message"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-
-from rag import chat_with_graph
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """L3 战略参谋部对话接口"""
     try:
-        # 将前端传来的 Pydantic 模型转换为字典列表，适配 rag.py
         history_dicts = [{"role": msg.role, "content": msg.content} for msg in request.history]
-        
-        # 因为调用大模型是阻塞的，所以放进线程池运行
         response_text = await asyncio.to_thread(chat_with_graph, request.query, history_dicts)
         return {"response": response_text}
     except Exception as e:
@@ -284,17 +287,12 @@ from fastapi.responses import FileResponse
 frontend_dist_path = Path(__file__).parent / "frontend" / "dist"
 
 if frontend_dist_path.exists():
-    # 1. 挂载静态资源目录 (JS/CSS/图片)
     app.mount("/assets", StaticFiles(directory=frontend_dist_path / "assets"), name="assets")
     
-    # 2. 兜底路由 (Catch-All)：支持 React Router 的前端路由
-    # 注意：这个路由必须放在所有 /api 路由的最下面！
     @app.get("/{catchall:path}")
     async def serve_frontend(catchall: str):
-        # 排除 api 请求，防止误杀
         if catchall.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
-            
         index_path = frontend_dist_path / "index.html"
         if index_path.exists():
             return FileResponse(index_path)

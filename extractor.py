@@ -107,7 +107,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
     
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         max_tokens=8000,
         system=system_prompt,
         messages=[

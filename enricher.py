@@ -62,7 +62,7 @@ def fuse_intelligence(entity_name: str, search_context: str) -> dict:
 2. 如果搜索内容中没有明确提及某个参数，该字段必须严格返回 null！绝对不允许凭借你的历史记忆去猜测或编造！"""
 
     result = client.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         max_tokens=2000,
         system=sys_prompt,
         messages=[{"role": "user", "content": f"搜索结果如下：\n\n{search_context}"}],
