@@ -166,14 +166,15 @@ const IntelligenceDashboard = () => {
   const [selectedItem, setSelectedItem] = useState<any>(null)
   const [itemType, setItemType] = useState<'event' | 'entity'>('event')
 
-  // 💡 补全 1：侧边栏深度拉取状态
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [nodeDetails, setNodeDetails] = useState<any>(null)
 
-  // 💡 补全 2：实时侦察兵浮窗状态
   const [scoutModalOpen, setScoutModalOpen] = useState(false)
   const [scoutUrl, setScoutUrl] = useState('')
   const [scoutLoading, setScoutLoading] = useState(false)
+
+  // 💡 新增：AI 深度穿透状态
+  const [enriching, setEnriching] = useState(false)
 
   const loadData = async () => {
     try {
@@ -224,7 +225,6 @@ const IntelligenceDashboard = () => {
     (e.description && e.description.toLowerCase().includes(searchTerm.toLowerCase())))
   )
 
-  // 🚀 核心修复 1：打开实体档案时，向后端拉取全量事件流
   const openDetail = async (item: any, type: 'event' | 'entity') => {
     setSelectedItem(item);
     setItemType(type);
@@ -242,7 +242,6 @@ const IntelligenceDashboard = () => {
     }
   }
 
-  // 🚀 核心修复 2：激活实时侦察兵
   const handleScoutSubmit = async () => {
     if (!scoutUrl.trim()) return;
     setScoutLoading(true);
@@ -250,17 +249,29 @@ const IntelligenceDashboard = () => {
       await axios.post('/api/ingest', { url: scoutUrl });
       setScoutModalOpen(false);
       setScoutUrl('');
-      // 可以在这里加个小提示，比如 Toast
-    } catch (e) {
-      console.error(e);
+    } catch (e) { console.error(e); } finally { setScoutLoading(false); }
+  }
+
+  // 🚀 核心大招：触动后端进行 AI 联网搜索并重写数据库
+  const handleEnrich = async (id: string) => {
+    setEnriching(true);
+    try {
+      await axios.post(`/api/enrich/${id}`);
+      const res = await axios.get(`/api/entity/${id}`);
+      setNodeDetails(res.data);
+      loadData();
+    } catch (error: any) { // 👈 加上 :any，防止 TS 报错
+      console.error(error);
+      // 💡 提取后端传过来的真正死因，不再用假消息骗人
+      const trueError = error.response?.data?.detail || error.message || "未知错误";
+      alert(`⚠️ 深度穿透失败: \n${trueError}`);
     } finally {
-      setScoutLoading(false);
+      setEnriching(false);
     }
   }
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6 relative h-full">
-      {/* 💅 修复版头：使用 xl:flex-row 和 whitespace-nowrap 防止标题换行 */}
       <div className="flex flex-col xl:flex-row xl:justify-between xl:items-end gap-4">
         <div className="shrink-0">
           <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 whitespace-nowrap">📚 情报大盘 (Intelligence DB)</h1>
@@ -303,7 +314,6 @@ const IntelligenceDashboard = () => {
           <div className="flex h-64 items-center justify-center text-slate-500 animate-pulse">正在从数据库提取加密情报...</div>
         ) : (
           <>
-            {/* 时间线 */}
             {subTab === 'timeline' && (
               <div className="space-y-4">
                 {filteredEvents.map(ev => (
@@ -322,7 +332,6 @@ const IntelligenceDashboard = () => {
               </div>
             )}
 
-            {/* 实体库 */}
             {['company', 'product', 'person', 'tech_concept'].includes(subTab) && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filteredEntities.map(ent => (
@@ -345,7 +354,6 @@ const IntelligenceDashboard = () => {
         )}
       </div>
 
-      {/* 🚀 侧边栏：绝密档案详情页 (Drawer) */}
       {selectedItem && (
         <div className="fixed inset-y-0 right-0 w-full md:w-[500px] bg-slate-900/95 border-l border-slate-700/80 backdrop-blur-3xl p-6 md:p-8 overflow-y-auto z-50 shadow-[-20px_0_50px_rgba(0,0,0,0.5)] animate-in slide-in-from-right-8 duration-300">
           <button onClick={() => setSelectedItem(null)} className="absolute top-6 right-6 text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full transition-colors z-10"><XCircle className="w-5 h-5"/></button>
@@ -375,72 +383,109 @@ const IntelligenceDashboard = () => {
                 </div>
               </>
             ) : (
-              <>
-                <div className="mb-6">
-                  <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">{String(selectedItem.type).toUpperCase()}</span>
-                  <h2 className="text-2xl font-bold text-white mt-4">{selectedItem.name}</h2>
-                  <p className="text-xs text-slate-500 font-mono mt-2">入库时间: {selectedItem.created_at.substring(0, 10)}</p>
-                </div>
-                
-                <div className="space-y-6">
-                  <div>
-                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-indigo-500 rounded-sm mr-2"></span>实体描述</h3>
-                     <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">{selectedItem.description || '暂无该实体的详细描述。'}</div>
-                  </div>
-                  
-                  {Object.keys(parseJson(selectedItem.attributes_json)).length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-amber-500 rounded-sm mr-2"></span>结构化参数</h3>
-                      <div className="grid grid-cols-2 gap-3">
-                        {Object.entries(parseJson(selectedItem.attributes_json)).map(([k, v]) => {
-                          if (!v || v === 'null' || (Array.isArray(v) && v.length === 0)) return null;
-                          return (
-                            <div key={k} className="p-3 rounded-lg bg-slate-900 border border-slate-800">
-                              <div className="text-[10px] text-slate-500 uppercase mb-1">{k.replace(/_/g, ' ')}</div>
-                              <div className="text-sm text-slate-200 truncate" title={renderAttr(v)}>{renderAttr(v)}</div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
+              // 🚀 实体档案全方位优化
+              (() => {
+                // 如果后端详情已拉取，使用详情；否则使用列表的浅层数据兜底
+                const entityData = nodeDetails?.entity || selectedItem;
+                const attrs = parseJson(entityData.attributes_json);
+                const hasAttrs = Object.keys(attrs).length > 0;
+                const hasEvents = nodeDetails?.events?.length > 0;
 
-                  {/* 🚀 补全 3：向后端拉取并渲染关联事件流 */}
-                  {detailsLoading ? (
-                    <div className="py-8 flex flex-col items-center justify-center text-slate-500">
-                      <Loader2 className="w-6 h-6 animate-spin mb-3 text-indigo-500"/>
-                      正在向下钻取底层关联线索...
+                return (
+                  <>
+                    <div className="mb-6 flex justify-between items-start pr-10">
+                      <div>
+                        <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">{String(entityData.type).toUpperCase()}</span>
+                        <h2 className="text-2xl font-bold text-white mt-4">{entityData.name}</h2>
+                        <p className="text-xs text-slate-500 font-mono mt-2">入库时间: {entityData.created_at?.substring(0, 10)}</p>
+                      </div>
+                      
+                      {/* ⚡️ 呼叫 AI 深度补全按钮 */}
+                      <button 
+                        onClick={() => handleEnrich(entityData.id)}
+                        disabled={enriching}
+                        className="flex items-center px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                        title="呼叫大模型 Agent 联网搜索补全此实体档案"
+                      >
+                        {enriching ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin"/> : <Bot className="w-4 h-4 mr-1.5"/>}
+                        {enriching ? '正在穿透...' : 'AI 深度补全'}
+                      </button>
                     </div>
-                  ) : nodeDetails?.events?.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
-                        <span className="w-1 h-3 bg-pink-500 rounded-sm mr-2"></span> 关联事件轴 ({nodeDetails.events.length})
-                      </h3>
-                      <div className="space-y-4 relative before:absolute before:inset-0 before:ml-[11px] before:w-0.5 before:bg-slate-700">
-                        {nodeDetails.events.map((e: any) => (
-                          <div key={e.id} className="relative flex items-start gap-4 group">
-                             <div className="w-6 h-6 shrink-0 rounded-full bg-slate-900 border-2 border-slate-700 z-10 group-hover:border-cyan-500 transition-colors mt-1"></div>
-                             <div className="flex-1 bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 group-hover:border-cyan-500/30 transition-colors">
-                               <div className="text-[10px] text-slate-400 font-mono mb-1 flex justify-between">
-                                 {e.date.substring(0, 10)}
-                                 {e.risk_level && <span className="text-rose-400">{e.risk_level}</span>}
-                               </div>
-                               <div className="text-sm text-slate-200 leading-snug">{e.title}</div>
-                             </div>
+                    
+                    <div className="space-y-6">
+                      <div>
+                         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-indigo-500 rounded-sm mr-2"></span>实体描述</h3>
+                         <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">
+                           {entityData.description ? entityData.description : (
+                             <span className="text-slate-500 flex items-center">
+                               档案为空。点击右上角「AI 深度补全」可呼叫全网搜索生成档案。
+                             </span>
+                           )}
+                         </div>
+                      </div>
+                      
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-amber-500 rounded-sm mr-2"></span>结构化参数</h3>
+                        {hasAttrs ? (
+                          <div className="grid grid-cols-2 gap-3">
+                            {Object.entries(attrs).map(([k, v]) => {
+                              if (!v || v === 'null' || (Array.isArray(v) && v.length === 0)) return null;
+                              return (
+                                <div key={k} className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                                  <div className="text-[10px] text-slate-500 uppercase mb-1">{k.replace(/_/g, ' ')}</div>
+                                  <div className="text-sm text-slate-200 truncate" title={renderAttr(v)}>{renderAttr(v)}</div>
+                                </div>
+                              )
+                            })}
                           </div>
-                        ))}
+                        ) : (
+                          <div className="p-4 rounded-xl border border-dashed border-slate-700 text-slate-500 text-xs text-center bg-slate-900/30">
+                            未提取到多维参数，档案待扩充
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
 
-                </div>
-              </>
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
+                          <span className="w-1 h-3 bg-pink-500 rounded-sm mr-2"></span> 关联事件轴 ({nodeDetails?.events?.length || 0})
+                        </h3>
+                        {detailsLoading ? (
+                          <div className="py-8 flex flex-col items-center justify-center text-slate-500">
+                            <Loader2 className="w-6 h-6 animate-spin mb-3 text-indigo-500"/>
+                            正在向下钻取底层关联线索...
+                          </div>
+                        ) : hasEvents ? (
+                          <div className="space-y-4 relative before:absolute before:inset-0 before:ml-[11px] before:w-0.5 before:bg-slate-700">
+                            {nodeDetails.events.map((e: any) => (
+                              <div key={e.id} className="relative flex items-start gap-4 group">
+                                 <div className="w-6 h-6 shrink-0 rounded-full bg-slate-900 border-2 border-slate-700 z-10 group-hover:border-cyan-500 transition-colors mt-1"></div>
+                                 <div className="flex-1 bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 group-hover:border-cyan-500/30 transition-colors">
+                                   <div className="text-[10px] text-slate-400 font-mono mb-1 flex justify-between">
+                                     {e.date.substring(0, 10)}
+                                     {e.risk_level && <span className="text-rose-400">{e.risk_level}</span>}
+                                   </div>
+                                   <div className="text-sm text-slate-200 leading-snug">{e.title}</div>
+                                 </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-6 rounded-xl border border-dashed border-slate-700 text-slate-500 text-sm text-center flex flex-col items-center bg-slate-900/30">
+                            <Activity className="w-6 h-6 mb-2 opacity-50"/>
+                            雷达阵列尚未捕获到与该实体直接相关的动态事件
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  </>
+                );
+              })()
             )}
           </div>
         </div>
       )}
 
-      {/* 🚀 补全 4：实时侦察兵专属模态框 (Modal) */}
       {scoutModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-full max-w-lg shadow-2xl scale-in-95 mx-4">
@@ -465,7 +510,6 @@ const IntelligenceDashboard = () => {
         </div>
       )}
       
-      {/* 遮罩层 (点击关闭侧边栏) */}
       {selectedItem && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40" onClick={() => setSelectedItem(null)}></div>
       )}

@@ -20,14 +20,21 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import os
+from datetime import datetime
+from fastapi import FastAPI, Request, HTTPException
+# ... 其他 import
 from database import (
     init_db, push_task, get_pending_task, update_task_status,
     save_extraction_result, get_connection, get_recent_events, query_all_entities,
     query_entity_by_id, get_events_for_entity
 )
+from worker import process_intel_task
 from extractor import extract_with_validation
 from ingestion import fetch_clean_markdown
 from enricher import run_enrichment
+from neo_client import neo_db
+from rag import chat_with_graph
 
 # ============================================================================
 # 生命周期与 Worker 引擎
@@ -51,58 +58,9 @@ async def lifespan(app: FastAPI):
             conn.close()
     except Exception as e:
         print(f"⚠️ 僵尸任务重置失败: {e}")
-        
-    print("🚀 启动 3 个并发后台 Worker...")
-    for _ in range(3):
-        asyncio.create_task(background_worker())
-    
+
     yield
     print("👋 应用关闭")
-
-async def background_worker():
-    print("✅ 后台 Worker 已启动")
-    while True:
-        try:
-            task = get_pending_task()
-            if task:
-                task_id, url = task["id"], task["url"]
-                print(f"\n[Worker] 开始处理: {url}")
-                try:
-                    content = ""
-                    if url.startswith("file://"):
-                        file_path = url[7:]
-                        try:
-                            from markitdown import MarkItDown
-                            md = MarkItDown()
-                            parsed = await asyncio.to_thread(md.convert, file_path)
-                            content = parsed.text_content
-                        except Exception as e:
-                            raise Exception(f"文档解析失败: {e}")
-                    else:
-                        content = await asyncio.to_thread(fetch_clean_markdown, url)
-                        if not content: raise Exception("网页抓取为空")
-                        
-                    # 黄金切片：8000字，重叠400字
-                    chunk_size, overlap = 8000, 400
-                    chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size - overlap)]
-                    
-                    total_ent, total_evt = 0, 0
-                    for i, chunk in enumerate(chunks):
-                        result = await asyncio.to_thread(extract_with_validation, chunk)
-                        if result.entities or result.events:
-                            await asyncio.to_thread(save_extraction_result, result)
-                            total_ent += len(result.entities)
-                            total_evt += len(result.events)
-                    
-                    update_task_status(task_id, "completed")
-                    print(f"🎉 任务 #{task_id} 完成! 摄入 {total_ent}实体, {total_evt}事件")
-                except Exception as e:
-                    update_task_status(task_id, "failed", str(e))
-                    print(f"❌ 任务 #{task_id} 失败: {e}")
-            else:
-                await asyncio.sleep(5)
-        except Exception as e:
-            await asyncio.sleep(5)
 
 # ============================================================================
 # App 实例化与 CORS 配置
@@ -155,39 +113,57 @@ async def get_dashboard_stats():
 
 @app.get("/api/graph")
 async def get_graph_data(entity_id: str = None):
-    """获取图谱的节点(nodes)和连线(links)数据"""
-    conn = get_connection()
+    """从 Neo4j 获取图谱的节点(nodes)和连线(links)数据"""
     try:
-        cursor = conn.cursor()
-        nodes, links, entity_ids = [], [], set()
-
         if entity_id:
-            cursor.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE source_id = ? OR target_id = ? LIMIT 300", (entity_id, entity_id))
+            # 💡 核心升级：查指定节点的 1 跳甚至 2 跳关系网
+            query = """
+            MATCH (s:Entity)-[r]->(t:Entity)
+            WHERE s.id = $entity_id OR t.id = $entity_id
+            RETURN s.id AS source_id, s.name AS source_name, s.type AS source_type,
+                   type(r) AS rel_type,
+                   t.id AS target_id, t.name AS target_name, t.type AS target_type
+            LIMIT 500
+            """
+            params = {"entity_id": entity_id}
         else:
-            cursor.execute("SELECT source_id, target_id, relation_type FROM relationships ORDER BY id DESC LIMIT 300")
+            # 💡 核心升级：全局大盘，拉取最核心的拓扑结构
+            query = """
+            MATCH (s:Entity)-[r]->(t:Entity)
+            RETURN s.id AS source_id, s.name AS source_name, s.type AS source_type,
+                   type(r) AS rel_type,
+                   t.id AS target_id, t.name AS target_name, t.type AS target_type
+            LIMIT 300
+            """
+            params = {}
 
-        for row in cursor.fetchall():
-            links.append({"source": row[0], "target": row[1], "label": row[2]})
-            entity_ids.update([row[0], row[1]])
+        # 执行原生 Cypher 查询
+        records = neo_db.execute_query(query, params)
 
-        valid_node_ids = set()
-        if entity_ids:
-            placeholders = ','.join(['?'] * len(entity_ids))
-            cursor.execute(f"SELECT id, name, type FROM entities WHERE id IN ({placeholders})", list(entity_ids))
-            for row in cursor.fetchall():
-                nodes.append({"id": row[0], "name": row[1], "type": row[2]})
-                valid_node_ids.add(row[0])
+        nodes_dict = {}
+        links = []
 
-        valid_links = [
-            link for link in links 
-            if link["source"] in valid_node_ids and link["target"] in valid_node_ids
-        ]
-        return {"nodes": nodes, "links": valid_links}
+        for row in records:
+            s_id, t_id = row['source_id'], row['target_id']
+            
+            # 去重记录节点
+            if s_id not in nodes_dict:
+                nodes_dict[s_id] = {"id": s_id, "name": row['source_name'], "type": row['source_type']}
+            if t_id not in nodes_dict:
+                nodes_dict[t_id] = {"id": t_id, "name": row['target_name'], "type": row['target_type']}
+                
+            # 记录连线
+            links.append({
+                "source": s_id,
+                "target": t_id,
+                "label": row['rel_type']
+            })
+
+        return {"nodes": list(nodes_dict.values()), "links": links}
+
     except Exception as e:
-        print(f"❌ 图谱 API 崩溃拦截: {e}")
+        print(f"❌ Neo4j 图谱 API 崩溃: {e}")
         return {"nodes": [], "links": []}
-    finally:
-        conn.close()
 
 @app.get("/api/events")
 async def get_events(limit: int = 30):
@@ -238,10 +214,39 @@ async def get_task_stats():
     finally:
         conn.close()
 
+from datetime import datetime
+
 @app.post("/api/ingest")
-async def ingest_url(request: IngestRequest):
-    if push_task(request.url): return {"status": "queued"}
-    return {"status": "already_exists"}
+async def ingest_url(request: Request):
+    data = await request.json()
+    url = data.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL 不能为空")
+
+    # 1. 极速写入 SQLite 占位，获取唯一的 task_id
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # 插入任务并获取自增 ID
+        cursor.execute("""
+            INSERT INTO task_queue (url, status, created_at) 
+            VALUES (?, 'pending', ?)
+        """, (url, datetime.now().isoformat()))
+        task_id = cursor.lastrowid
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        # 如果是因为 URL 重复导致的报错，我们简单处理
+        raise HTTPException(status_code=400, detail="任务已存在或数据库写入失败")
+    finally:
+        conn.close()
+
+    # 2. ⚡️ 核心质变：将任务打入 Redis 队列，让 Celery 异步接管！
+    # .delay() 是 Celery 的魔法方法，它会瞬间把参数打包发给 Redis，然后立刻返回
+    process_intel_task.delay(task_id, url)
+    
+    # 3. FastAPI 秒回前端，前端再也不会转圈卡顿了
+    return {"status": "success", "message": "目标已成功发射至 Redis 高并发队列"}
 
 UPLOAD_DIR = Path(__file__).parent / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,16 +254,31 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     try:
+        # 1. 保存实体文件
         safe_name = f"{uuid.uuid4().hex[:8]}_{file.filename}"
         save_path = UPLOAD_DIR / safe_name
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         file_url = f"file://{save_path.absolute()}"
-        if push_task(file_url): return {"status": "queued", "filename": file.filename}
-        return {"status": "already_exists"}
+        
+        # 2. 极速写入 SQLite 占位获取 ID
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO task_queue (url, status, created_at) 
+            VALUES (?, 'pending', ?)
+        """, (file_url, datetime.now().isoformat()))
+        task_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        # 3. ⚡️ 将文件解析任务打入 Redis 队列
+        process_intel_task.delay(task_id, file_url)
+        
+        return {"status": "queued", "filename": file.filename}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.post("/api/enrich/{entity_id}")
 async def force_enrich_entity(entity_id: str):
     try:

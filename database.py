@@ -219,14 +219,25 @@ def get_smart_rag_context(query: str) -> str:
                     risk_tag = f"[{e['risk_level']}] " if dict(e).get('risk_level') else ""
                     context_parts.append(f"- [{e[1][:10]}] {risk_tag}{e[0]}: {e[2]}")
 
-        placeholders = ','.join(['?'] * len(matched_ids_list))
-        cursor.execute(f"SELECT r.relation_type, e1.name, e2.name, r.evidence FROM relationships r JOIN entities e1 ON r.source_id = e1.id JOIN entities e2 ON r.target_id = e2.id WHERE r.source_id IN ({placeholders}) OR r.target_id IN ({placeholders}) LIMIT 50", matched_ids_list * 2)
-        relationships = cursor.fetchall()
-        if relationships:
-            context_parts.append("\n--- 关系网 ---")
-            for r in relationships:
-                evid = f" (证据: {r[3]})" if r[3] else ""
-                context_parts.append(f"- {r[1]} --[{r[0]}]--> {r[2]}{evid}")
+        # --- 🚀 核心替换：使用 Neo4j 提取深层关系网 ---
+        context_parts.append("\n--- 🕸️ Neo4j 拓扑关系网 ---")
+        try:
+            from neo_client import neo_db
+            query = """
+            MATCH (s:Entity)-[r]-(t:Entity)
+            WHERE s.id IN $anchor_ids
+            RETURN s.name AS source, type(r) AS rel, t.name AS target, r.evidence AS evidence
+            LIMIT 50
+            """
+            # 直接将匹配到的实体 ID 列表扔给 Neo4j 去辐射图谱
+            neo_records = neo_db.execute_query(query, {"anchor_ids": matched_ids_list})
+            
+            for rec in neo_records:
+                evid = f" (证据: {rec['evidence']})" if rec['evidence'] else ""
+                context_parts.append(f"- {rec['source']} --[{rec['rel']}]--> {rec['target']}{evid}")
+                
+        except Exception as e:
+            print(f"⚠️ Neo4j 关系拉取失败: {e}")
 
         return "\n".join(context_parts)
     finally:
