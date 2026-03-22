@@ -35,28 +35,25 @@ from ontology import (
 from database import query_all_entities
 
 
+# ── 单例模式 ────────────────────────────────────────────────────────────────
+_extractor_client = None
+
+def _get_extractor():
+    global _extractor_client
+    if _extractor_client is None:
+        api_key = os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise ValueError("请设置环境变量 MINIMAX_API_KEY")
+        client = Anthropic(
+            api_key=api_key,
+            base_url="https://api.minimaxi.com/anthropic"
+        )
+        _extractor_client = instructor.from_anthropic(client)
+    return _extractor_client
+
 def create_extractor():
-    """
-    创建 instructor 包装的 Anthropic 客户端
-    
-    使用 MiniMax API (国内节点)
-    """
-    # 从环境变量获取 API Key
-    api_key = os.environ.get("MINIMAX_API_KEY")
-    if not api_key:
-        raise ValueError("请设置环境变量 MINIMAX_API_KEY")
-    
-    # 创建 Anthropic 客户端 (使用 MiniMax 兼容的 API 端点)
-    client = Anthropic(
-        api_key=api_key,
-        base_url="https://api.minimaxi.com/anthropic"
-    )
-    
-    # 使用 instructor 包装客户端
-    # instructor 会自动解析 JSON 响应为 Pydantic 模型
-    extractor = instructor.from_anthropic(client)
-    
-    return extractor
+    """兼容旧调用，保持接口不变"""
+    return _get_extractor()
 
 
 def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionResult:

@@ -68,7 +68,56 @@ def init_db() -> None:
         except: pass
         
         conn.commit()
+        
+        # 确保性能索引存在
+        for sql in [
+            "CREATE INDEX IF NOT EXISTS idx_events_entities ON events(involved_entities_json)",
+            "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)",
+            "CREATE INDEX IF NOT EXISTS idx_task_status ON task_queue(status)",
+            "CREATE INDEX IF NOT EXISTS idx_events_published ON events(published_date)",
+        ]:
+            try: cursor.execute(sql)
+            except: pass
+        conn.commit()
+        
         print(f"✅ 数据库底座就绪: {DB_PATH}")
+
+        # FTS5 全文索引初始化（幂等，可重复调用）
+        try:
+            import sqlite3 as _sqlite3
+            _conn = _sqlite3.connect(str(DB_PATH))
+            _cur = _conn.cursor()
+            _cur.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+                    entity_id UNINDEXED, content,
+                    tokenize='unicode61 remove_diacritics 2'
+                )
+            """)
+            _cur.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                    event_id UNINDEXED, title, summary,
+                    tokenize='unicode61 remove_diacritics 2'
+                )
+            """)
+            # 增量同步
+            _cur.execute("""
+                INSERT INTO entities_fts(entity_id, content)
+                SELECT id, COALESCE(name, '') || ' ' || COALESCE(aliases_json, '') || ' ' ||
+                       COALESCE(description, '') || ' ' || COALESCE(attributes_json, '')
+                FROM entities e
+                WHERE NOT EXISTS (SELECT 1 FROM entities_fts f WHERE f.entity_id = e.id)
+            """)
+            _cur.execute("""
+                INSERT INTO events_fts(event_id, title, summary)
+                SELECT id, COALESCE(title, ''), COALESCE(summary, '')
+                FROM events e
+                WHERE NOT EXISTS (SELECT 1 FROM events_fts f WHERE f.event_id = e.id)
+            """)
+            _conn.commit()
+            _conn.close()
+            print("✅ FTS5 全文索引已就绪")
+        except Exception as e:
+            print(f"⚠️ FTS5 初始化失败（不影响主流程）: {e}")
     finally:
         conn.close()
 
@@ -76,33 +125,77 @@ def save_extraction_result(result: ExtractionResult) -> None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        
+        # ── 预防重复：建立 (name, type) → 已有ID 的映射 ─────────────────────
+        # 新实体如果同名同类，直接复用已有ID，避免产生副本
+        cursor.execute("SELECT name, type, id FROM entities")
+        name_type_to_id = {(row[0], row[1]): row[2] for row in cursor.fetchall()}
+        
+        # 新 ID 映射：生成的 ID → 规范 ID（可能是自己，也可能是已有ID）
+        id_mapping = {}  # new_id → canonical_id
+        
         for entity in result.entities:
             entity_type = entity.entity_type.value if hasattr(entity.entity_type, 'value') else str(entity.entity_type)
             entity_dict = entity.model_dump()
             base_keys = {'id', 'entity_type', 'name', 'aliases', 'description', 'created_at'}
             attributes = {k: v for k, v in entity_dict.items() if k not in base_keys and v is not None and v != []}
-
+            
+            # 关键：同名同类实体复用已有ID，从根源上防止重复
+            canonical_id = name_type_to_id.get((entity.name, entity_type))
+            use_id = canonical_id if canonical_id else entity.id
+            
+            if canonical_id:
+                # 已有实体：补充缺失的属性字段（不覆盖已有非空字段）
+                cursor.execute("SELECT attributes_json, description FROM entities WHERE id = ?", (canonical_id,))
+                row = cursor.fetchone()
+                if row:
+                    existing_attrs = json.loads(row[0]) if row[0] and row[0] not in ('null', '') else {}
+                    existing_desc = row[1] or ''
+                    # 补充新属性
+                    for k, v in attributes.items():
+                        if k not in existing_attrs or not existing_attrs[k]:
+                            existing_attrs[k] = v
+                    # 描述取较长的
+                    if len(str(entity.description or '')) > len(existing_desc):
+                        existing_desc = entity.description
+                    attributes = existing_attrs
+                    entity_desc = existing_desc
+                else:
+                    entity_desc = entity.description
+            else:
+                entity_desc = entity.description
+                # 记录新产生的 ID
+                name_type_to_id[(entity.name, entity_type)] = use_id
+            
+            id_mapping[entity.id] = use_id
+            
             cursor.execute("""
                 INSERT OR REPLACE INTO entities (id, type, name, aliases_json, description, created_at, attributes_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (entity.id, entity_type, entity.name, json.dumps(entity.aliases), entity.description, 
+            """, (use_id, entity_type, entity.name, json.dumps(entity.aliases), entity_desc, 
                   entity.created_at.isoformat() if isinstance(entity.created_at, datetime) else str(entity.created_at), json.dumps(attributes, ensure_ascii=False)))
         
+        # ── 写入 events：把实体ID映射到规范ID ──────────────────────────────
         for event in result.events:
+            canonical_ids = [id_mapping.get(eid, eid) for eid in event.involved_entity_ids]
             cursor.execute("""
                 INSERT OR REPLACE INTO events (id, title, date, published_date, involved_entities_json, summary, source_url, created_at, risk_level, sentiment)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (event.id, event.title, event.date.isoformat() if isinstance(event.date, datetime) else str(event.date),
                   event.published_date.isoformat() if isinstance(event.published_date, datetime) else str(event.published_date),
-                  json.dumps(event.involved_entity_ids), event.summary, event.source_url,
+                  json.dumps(canonical_ids), event.summary, event.source_url,
                   event.created_at.isoformat() if isinstance(event.created_at, datetime) else str(event.created_at),
                   getattr(event, 'risk_level', None), getattr(event, 'sentiment', None)))
         
+        # ── 写入 relationships：把实体ID映射到规范ID ───────────────────────
         for rel in result.relationships:
+            src = id_mapping.get(rel.source_id, rel.source_id)
+            tgt = id_mapping.get(rel.target_id, rel.target_id)
+            rtype = rel.relation_type.value if hasattr(rel.relation_type, 'value') else str(rel.relation_type)
             cursor.execute("""
                 INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type, start_date, end_date, evidence)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (rel.source_id, rel.target_id, rel.relation_type.value if hasattr(rel.relation_type, 'value') else str(rel.relation_type),
+            """, (src, tgt, rtype,
                   rel.start_date.isoformat() if rel.start_date and isinstance(rel.start_date, datetime) else (rel.start_date if rel.start_date else None),
                   rel.end_date.isoformat() if rel.end_date and isinstance(rel.end_date, datetime) else (rel.end_date if rel.end_date else None),
                   getattr(rel, 'evidence', None)))
@@ -179,65 +272,282 @@ def update_task_status(task_id: int, status: str, error_msg: str = None) -> None
         conn.commit()
     finally: conn.close()
 
-def get_events_for_entity(entity_id: str) -> list:
+def ensure_fts_tables() -> None:
+    """
+    初始化并维护 FTS5 虚拟表，用于全文检索（BM25 排序）。
+    每次调用会增量同步新数据，不重复全量重建。
+    """
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM events WHERE involved_entities_json LIKE ? ORDER BY date DESC", (f'%"{entity_id}"%',))
+
+        # ── 实体 FTS5 ─────────────────────────────────────────────────────────
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+                entity_id UNINDEXED,
+                content,
+                tokenize='unicode61 remove_diacritics 2'
+            )
+        """)
+        conn.commit()
+
+        # 同步：对比主表和 FTS 表，取差量更新
+        cursor.execute("""
+            INSERT INTO entities_fts(entity_id, content)
+            SELECT id,
+                   COALESCE(name, '') || ' ' ||
+                   COALESCE(aliases_json, '') || ' ' ||
+                   COALESCE(description, '') || ' ' ||
+                   COALESCE(attributes_json, '')
+            FROM entities e
+            WHERE NOT EXISTS (
+                SELECT 1 FROM entities_fts f WHERE f.entity_id = e.id
+            )
+        """)
+        conn.commit()
+
+        # ── 事件 FTS5 ─────────────────────────────────────────────────────────
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                event_id UNINDEXED,
+                title,
+                summary,
+                tokenize='unicode61 remove_diacritics 2'
+            )
+        """)
+        conn.commit()
+
+        cursor.execute("""
+            INSERT INTO events_fts(event_id, title, summary)
+            SELECT id, COALESCE(title, ''), COALESCE(summary, '')
+            FROM events e
+            WHERE NOT EXISTS (
+                SELECT 1 FROM events_fts f WHERE f.event_id = e.id
+            )
+        """)
+        conn.commit()
+
+        # ── 重建函数（可随时调用）────────────────────────────────────────────
+        print("✅ FTS5 全文索引已同步")
+    finally:
+        conn.close()
+
+
+def rebuild_fts_tables() -> None:
+    """全量重建 FTS 表（数据不一致时调用）"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        for sql in [
+            "DROP TABLE IF EXISTS entities_fts",
+            "DROP TABLE IF EXISTS events_fts",
+        ]:
+            cursor.execute(sql)
+        conn.commit()
+        ensure_fts_tables()
+        print("✅ FTS5 全文索引全量重建完成")
+    finally:
+        conn.close()
+
+
+def get_events_for_entity(entity_id: str) -> list:
+    """查询某实体关联的所有事件（使用 json_each 而非 LIKE，全表扫描）"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT e.* FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ?
+            ORDER BY e.date DESC
+        """, (entity_id,))
         return [dict(r) for r in cursor.fetchall()]
     finally: conn.close()
 
-def get_smart_rag_context(query: str) -> str:
+
+def _search_entities_fts(query: str, top_k: int = 10) -> list[tuple[str, float]]:
+    """
+    使用 FTS5 BM25 检索最相关的实体。
+    返回 [(entity_id, bm25_score), ...]，分数越低越相关。
+    """
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, aliases_json FROM entities")
-        all_entities = cursor.fetchall()
-        matched_entity_ids = set()
-        for row in all_entities:
-            eid, name, aliases_str = row[0], row[1], row[2]
-            if name.lower() in query.lower(): matched_entity_ids.add(eid)
-            if aliases_str:
-                try:
-                    for alias in json.loads(aliases_str):
-                        if alias.lower() in query.lower(): matched_entity_ids.add(eid)
-                except: pass
+        keywords = query.strip().split()
+        if not keywords:
+            return []
+        fts_query = ' OR '.join(f'"{kw}"' for kw in keywords if kw)
+        cursor.execute("""
+            SELECT entity_id, bm25(entities_fts) AS score
+            FROM entities_fts
+            WHERE entities_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+        """, (fts_query, top_k))
+        return [(str(r['entity_id']), float(r['score'])) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"⚠️ FTS5 实体检索失败，退回全文扫描: {e}")
+        return []
+    finally:
+        conn.close()
 
-        if not matched_entity_ids:
-            cursor.execute("SELECT title, date, summary FROM events ORDER BY date DESC LIMIT 30")
-            events = cursor.fetchall()
-            return "\n".join(["【全局动态】："] + [f"- [{e[1][:10]}] {e[0]}: {e[2]}" for e in events])
 
-        matched_ids_list = list(matched_entity_ids)
-        context_parts = [f"【精准检索】档案：\n"]
-        for eid in matched_ids_list:
-            cursor.execute("SELECT title, date, summary, risk_level, sentiment FROM events WHERE involved_entities_json LIKE ? ORDER BY date DESC LIMIT 20", (f'%"{eid}"%',))
-            events = cursor.fetchall()
-            if events:
-                context_parts.append("\n--- 关联事件 ---")
-                for e in events:
-                    risk_tag = f"[{e['risk_level']}] " if dict(e).get('risk_level') else ""
-                    context_parts.append(f"- [{e[1][:10]}] {risk_tag}{e[0]}: {e[2]}")
+def _search_events_fts(query: str, top_k: int = 20) -> list[tuple[str, float]]:
+    """
+    使用 FTS5 BM25 检索最相关的最新事件。
+    返回 [(event_id, bm25_score), ...]
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        keywords = query.strip().split()
+        if not keywords:
+            return []
+        fts_query = ' OR '.join(f'"{kw}"' for kw in keywords if kw)
+        cursor.execute("""
+            SELECT event_id, bm25(events_fts) AS score
+            FROM events_fts
+            WHERE events_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+        """, (fts_query, top_k))
+        return [(str(r['event_id']), float(r['score'])) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"⚠️ FTS5 事件检索失败: {e}")
+        return []
+    finally:
+        conn.close()
 
-        # --- 🚀 核心替换：使用 Neo4j 提取深层关系网 ---
-        context_parts.append("\n--- 🕸️ Neo4j 拓扑关系网 ---")
-        try:
-            from neo_client import neo_db
-            query = """
-            MATCH (s:Entity)-[r]-(t:Entity)
-            WHERE s.id IN $anchor_ids
-            RETURN s.name AS source, type(r) AS rel, t.name AS target, r.evidence AS evidence
-            LIMIT 50
-            """
-            # 直接将匹配到的实体 ID 列表扔给 Neo4j 去辐射图谱
-            neo_records = neo_db.execute_query(query, {"anchor_ids": matched_ids_list})
-            
-            for rec in neo_records:
-                evid = f" (证据: {rec['evidence']})" if rec['evidence'] else ""
-                context_parts.append(f"- {rec['source']} --[{rec['rel']}]--> {rec['target']}{evid}")
-                
-        except Exception as e:
-            print(f"⚠️ Neo4j 关系拉取失败: {e}")
+
+def get_smart_rag_context(query: str) -> str:
+    """
+    升级版 RAG 检索：
+    1. FTS5 BM25 精准匹配实体（替代暴力子串匹配）
+    2. json_each 精准关联事件（替代 LIKE 全表扫描）
+    3. Neo4j 多跳拓扑扩展（1-hop → 2-hop）
+    4. 双重兜底：FTS 事件检索 + 最新事件
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # ── Step 1：FTS5 BM25 实体检索（替代 name in query 暴力匹配）────────
+        fts_entities = _search_entities_fts(query, top_k=12)
+        if fts_entities:
+            matched_ids = [eid for eid, _ in fts_entities]
+        else:
+            # 兜底：FTS 查不到则用宽松 LIKE
+            cursor.execute("""
+                SELECT id FROM entities
+                WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?
+                LIMIT 12
+            """, (f'%{query}%', f'%{query}%'))
+            matched_ids = [str(r[0]) for r in cursor.fetchall()]
+
+        # ── Step 2：关联事件（json_each 精准匹配，不再 LIKE 全表扫描）─────────
+        context_parts = []
+        if matched_ids:
+            placeholders = ','.join('?' * len(matched_ids))
+            # 找同时涉及多个匹配实体的「高相关事件」，优先展示
+            cursor.execute(f"""
+                SELECT e.id, e.title, e.date, e.summary, e.risk_level, e.sentiment,
+                       COUNT(DISTINCT j.value) AS match_count
+                FROM events e
+                JOIN json_each(e.involved_entities_json) j
+                WHERE j.value IN ({placeholders})
+                GROUP BY e.id
+                ORDER BY match_count DESC, e.date DESC
+                LIMIT 30
+            """, matched_ids)
+            rows = cursor.fetchall()
+            if rows:
+                context_parts.append("【精准档案】关联事件：\n")
+                for r in rows:
+                    risk_tag = f" [{dict(r).get('risk_level') or '?'}] " if dict(r).get('risk_level') else "  "
+                    context_parts.append(
+                        f"  {dict(r)['date'][:10]}{risk_tag}{dict(r)['title']}: {dict(r)['summary']}"
+                    )
+            else:
+                context_parts.append("【精准档案】该主题暂无事件记录。\n")
+
+        # ── Step 3：FTS5 事件检索兜底（查询词匹配最新相关动态）──────────────
+        fts_events = _search_events_fts(query, top_k=15)
+        if fts_events:
+            fts_event_ids = [eid for eid, _ in fts_events]
+            placeholders = ','.join('?' * len(fts_event_ids))
+            cursor.execute(f"""
+                SELECT title, date, summary FROM events
+                WHERE id IN ({placeholders})
+                ORDER BY date DESC
+                LIMIT 15
+            """, fts_event_ids)
+            fts_rows = cursor.fetchall()
+            if fts_rows:
+                context_parts.append("\n【语义相关】最新动态：\n")
+                for r in fts_rows:
+                    context_parts.append(f"  {r['date'][:10]} {dict(r)['title']}: {dict(r)['summary']}")
+
+        # ── Step 4：Neo4j 多跳拓扑扩展（1-hop → 2-hop）──────────────────────
+        if matched_ids:
+            context_parts.append("\n【🕸️ 图谱拓扑】关系网络：\n")
+            try:
+                from neo_client import neo_db
+                if neo_db.driver:
+                    # 1-hop：直接邻居
+                    cypher_1hop = """
+                    MATCH (s:Entity)-[r]-(t:Entity)
+                    WHERE s.id IN $anchor_ids
+                    RETURN s.name AS source, type(r) AS rel, t.name AS target,
+                           r.evidence AS evidence, 1 AS depth
+                    LIMIT 40
+                    """
+                    records_1hop = neo_db.execute_query(cypher_1hop, {"anchor_ids": matched_ids})
+
+                    # 2-hop：通过中间节点扩展（跨领域关系发现）
+                    cypher_2hop = """
+                    MATCH (s:Entity)-[r1]-(mid:Entity)-[r2]-(t:Entity)
+                    WHERE s.id IN $anchor_ids AND t.id <> s.id
+                    RETURN s.name AS source, type(r1) AS rel1, mid.name AS via,
+                           type(r2) AS rel2, t.name AS target,
+                           r1.evidence AS evidence, 2 AS depth
+                    LIMIT 30
+                    """
+                    records_2hop = neo_db.execute_query(cypher_2hop, {"anchor_ids": matched_ids[:6]})
+
+                    seen_1hop = set()
+                    for rec in records_1hop:
+                        key = (rec['source'], rec['rel'], rec['target'])
+                        if key not in seen_1hop:
+                            seen_1hop.add(key)
+                            evid = f" (证据: {rec['evidence'][:60]})" if rec.get('evidence') else ""
+                            context_parts.append(
+                                f"  • {rec['source']} --[{rec['rel']}]--> {rec['target']}{evid}"
+                            )
+
+                    if records_2hop:
+                        context_parts.append("  ── 2-hop 扩展 ──")
+                        seen_2hop = set()
+                        for rec in records_2hop:
+                            key = (rec['source'], rec['rel1'], rec['via'], rec['rel2'], rec['target'])
+                            if key not in seen_2hop:
+                                seen_2hop.add(key)
+                                evid = f" (证据: {rec['evidence'][:50]})" if rec.get('evidence') else ""
+                                context_parts.append(
+                                    f"  • {rec['source']} --[{rec['rel1']}]--> {rec['via']}"
+                                    f" --[{rec['rel2']}]--> {rec['target']}{evid}"
+                                )
+                else:
+                    context_parts.append("  (Neo4j 未连接)")
+            except Exception as e:
+                context_parts.append(f"  (图谱查询失败: {e})")
+
+        if not context_parts:
+            # 完全兜底：返回最近事件
+            cursor.execute("SELECT title, date, summary FROM events ORDER BY date DESC LIMIT 20")
+            fallback = cursor.fetchall()
+            context_parts = ["【全局动态】\n"]
+            for r in fallback:
+                context_parts.append(f"  {r['date'][:10]} {dict(r)['title']}: {dict(r)['summary']}")
 
         return "\n".join(context_parts)
     finally:

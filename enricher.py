@@ -16,6 +16,22 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
+# ── 单例客户端（模块初始化时创建，整个进程生命周期复用）───────────────────────
+_client = None
+
+def _get_client() -> Anthropic:
+    global _client
+    if _client is None:
+        api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("未配置 MINIMAX_API_KEY 或 ANTHROPIC_API_KEY")
+        _client = Anthropic(
+            api_key=api_key,
+            base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic"),
+            timeout=60.0,
+        )
+    return _client
+
 def search_tavily(query: str) -> str:
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
@@ -29,8 +45,7 @@ def search_tavily(query: str) -> str:
     return context
 
 def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -> dict:
-    api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    client = Anthropic(api_key=api_key, base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic"), timeout=60.0)
+    client = _get_client()
     
     # 💡 核心升级：根据类型动态定制要提取的 JSON 字段！
     if entity_type == 'company':
