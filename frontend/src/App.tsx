@@ -3,6 +3,7 @@ import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2
 import axios from 'axios'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
+import { toPng } from 'html-to-image'
 
 // ============================================================================
 // 数据类型接口
@@ -175,6 +176,43 @@ const IntelligenceDashboard = () => {
 
   // 💡 新增：AI 深度穿透状态
   const [enriching, setEnriching] = useState(false)
+  // 📝 档案编辑模式状态
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({type:'',  description: '', attributes: '{}' });
+
+  // 🚀 执行上帝指令：保存修改
+  const handleSaveEdit = async () => {
+    let parsedAttributes = {};
+    try {
+      parsedAttributes = JSON.parse(editForm.attributes || '{}');
+    } catch (e) {
+      alert("⚠️ 结构化参数必须是合法的 JSON 格式！请检查双引号和括号。");
+      return;
+    }
+
+    try {
+      const entityData = nodeDetails?.entity || selectedItem;
+      const response = await fetch(`/api/entity/${entityData.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: editForm.type,
+          description: editForm.description,
+          attributes: parsedAttributes
+        })
+      });
+      
+      if (response.ok) {
+        setIsEditing(false);
+        loadData(); // 刷新后台列表
+        openDetail(entityData, 'entity'); // 重新拉取最新档案详情
+      } else {
+        alert("❌ 覆盖失败，请检查网络或后端日志。");
+      }
+    } catch (error) {
+      console.error("保存异常:", error);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -395,38 +433,92 @@ const IntelligenceDashboard = () => {
                   <>
                     <div className="mb-6 flex justify-between items-start pr-10">
                       <div>
-                        <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">{String(entityData.type).toUpperCase()}</span>
+                        {isEditing ? (
+    <select 
+      value={editForm.type}
+      onChange={(e) => setEditForm({...editForm, type: e.target.value})}
+      className="px-3 py-1 text-xs font-mono rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/50 focus:outline-none focus:ring-1 focus:ring-rose-500 cursor-pointer shadow-[0_0_10px_rgba(244,63,94,0.3)] appearance-none"
+    >
+      <option value="company">🏢 COMPANY (公司/机构)</option>
+      <option value="product">📦 PRODUCT (产品/项目)</option>
+      <option value="person">👤 PERSON (人物/高管)</option>
+      <option value="tech_concept">💡 TECH_CONCEPT (技术概念)</option>
+    </select>
+  ) : (
+    <span className="px-3 py-1 text-xs font-mono rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+      {String(entityData.type).toUpperCase()}
+    </span>
+  )}
                         <h2 className="text-2xl font-bold text-white mt-4">{entityData.name}</h2>
                         <p className="text-xs text-slate-500 font-mono mt-2">入库时间: {entityData.created_at?.substring(0, 10)}</p>
                       </div>
                       
-                      {/* ⚡️ 呼叫 AI 深度补全按钮 */}
-                      <button 
-                        onClick={() => handleEnrich(entityData.id)}
-                        disabled={enriching}
-                        className="flex items-center px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
-                        title="呼叫大模型 Agent 联网搜索补全此实体档案"
-                      >
-                        {enriching ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin"/> : <Bot className="w-4 h-4 mr-1.5"/>}
-                        {enriching ? '正在穿透...' : 'AI 深度补全'}
-                      </button>
+                      <div className="flex flex-col gap-2">
+                        {/* ⚡️ 呼叫 AI 深度补全按钮 */}
+                        <button 
+                          onClick={() => handleEnrich(entityData.id)}
+                          disabled={enriching || isEditing}
+                          className="flex items-center justify-center px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                          title="呼叫大模型 Agent 联网搜索补全此实体档案"
+                        >
+                          {enriching ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin"/> : <Bot className="w-4 h-4 mr-1.5"/>}
+                          {enriching ? '正在穿透...' : 'AI 深度补全'}
+                        </button>
+
+                        {/* ✏️ 上帝模式开关 */}
+                        <button 
+                          onClick={() => {
+                            const willEdit = !isEditing;
+                            setIsEditing(willEdit);
+                            if (willEdit) {
+                              setEditForm({
+                                type: entityData.type || 'company',
+                                description: entityData.description || '',
+                                attributes: entityData.attributes_json && entityData.attributes_json !== 'null' ? entityData.attributes_json : '{\n  \n}'
+                              });
+                            }
+                          }}
+                          className={`flex items-center justify-center px-3 py-2 border text-xs font-medium rounded-lg transition-colors ${
+                            isEditing 
+                              ? 'bg-rose-500/20 text-rose-400 border-rose-500/50 hover:bg-rose-500/30' 
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                          }`}
+                        >
+                          {isEditing ? '❌ 取消覆盖' : '✏️ 人工修正'}
+                        </button>
+                      </div>
                     </div>
                     
                     <div className="space-y-6">
                       <div>
                          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-indigo-500 rounded-sm mr-2"></span>实体描述</h3>
-                         <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">
-                           {entityData.description ? entityData.description : (
-                             <span className="text-slate-500 flex items-center">
-                               档案为空。点击右上角「AI 深度补全」可呼叫全网搜索生成档案。
-                             </span>
-                           )}
-                         </div>
+                         {isEditing ? (
+                           <textarea 
+                             className="w-full h-32 bg-slate-900 border border-cyan-500/50 rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]"
+                             value={editForm.description}
+                             onChange={(e) => setEditForm({...editForm, description: e.target.value})}
+                           />
+                         ) : (
+                           <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm leading-relaxed">
+                             {entityData.description ? entityData.description : (
+                               <span className="text-slate-500 flex items-center">
+                                 档案为空。点击右上角「AI 深度补全」可呼叫全网搜索生成档案。
+                               </span>
+                             )}
+                           </div>
+                         )}
                       </div>
                       
                       <div>
                         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center"><span className="w-1 h-3 bg-amber-500 rounded-sm mr-2"></span>结构化参数</h3>
-                        {hasAttrs ? (
+                        {isEditing ? (
+                           <textarea 
+                             className="w-full h-32 bg-slate-900 border border-amber-500/50 rounded-lg p-3 text-sm text-amber-100 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]"
+                             value={editForm.attributes}
+                             onChange={(e) => setEditForm({...editForm, attributes: e.target.value})}
+                             placeholder='{"CURRENT TITLE": "真实职务", "CORE ACHIEVEMENTS": "真实成就"}'
+                           />
+                        ) : hasAttrs ? (
                           <div className="grid grid-cols-2 gap-3">
                             {Object.entries(attrs).map(([k, v]) => {
                               if (!v || v === 'null' || (Array.isArray(v) && v.length === 0)) return null;
@@ -444,6 +536,16 @@ const IntelligenceDashboard = () => {
                           </div>
                         )}
                       </div>
+
+                      {/* ⚡️ 保存覆盖按钮 */}
+                      {isEditing && (
+                        <button 
+                          onClick={handleSaveEdit}
+                          className="w-full mt-2 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg font-bold tracking-widest transition-all shadow-[0_0_20px_rgba(8,145,178,0.4)] hover:shadow-[0_0_30px_rgba(8,145,178,0.6)]"
+                        >
+                          ⚡️ 确认覆写全局数据 (OVERRIDE)
+                        </button>
+                      )}
 
                       <div>
                         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
@@ -527,10 +629,28 @@ const TacticalGraph = () => {
   const [detailsLoading, setDetailsLoading] = useState(false);
   
   const fgRef = useRef<any>(null);
+  const graphContainerRef = useRef<HTMLDivElement>(null);
   
   const colorMap: Record<string, string> = { 
     company: '#3b82f6', product: '#ec4899', person: '#10b981', tech_concept: '#8b5cf6' 
   };
+
+  // 导出为高清图片
+  const handleExportImage = useCallback(async () => {
+    if (!graphContainerRef.current) return;
+    try {
+      const dataUrl = await toPng(graphContainerRef.current, {
+        backgroundColor: '#070b14',
+        pixelRatio: 2,
+      });
+      const link = document.createElement('a');
+      link.download = `tactical-graph-${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (error) {
+      console.error('导出图片失败:', error);
+    }
+  }, []);
 
   useEffect(() => {
     const fetchGraph = async () => {
@@ -624,18 +744,27 @@ const TacticalGraph = () => {
           </h1>
           <p className="text-slate-400 mt-2">点击任意实体调取高维情报档案</p>
         </div>
-        <div className="flex gap-4 text-xs">
-          {Object.entries(colorMap).map(([type, color]) => (
-            <span key={type} className="flex items-center px-2 py-1 rounded-md bg-slate-800 border border-slate-700">
-              <span className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: color }}></span>
-              {type.toUpperCase()}
-            </span>
-          ))}
+        <div className="flex items-center gap-4">
+          <div className="flex gap-4 text-xs">
+            {Object.entries(colorMap).map(([type, color]) => (
+              <span key={type} className="flex items-center px-2 py-1 rounded-md bg-slate-800 border border-slate-700">
+                <span className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: color }}></span>
+                {type.toUpperCase()}
+              </span>
+            ))}
+          </div>
+          <button
+            onClick={handleExportImage}
+            className="flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 hover:text-white transition-colors"
+            title="导出为高清图片"
+          >
+            📷 导出为高清图片
+          </button>
         </div>
       </div>
 
       {/* 图谱容器：设为 relative 以便固定侧边栏 */}
-      <div className="flex-1 relative rounded-2xl overflow-hidden border border-slate-700/50 bg-[#070b14] shadow-2xl">
+      <div ref={graphContainerRef} className="flex-1 relative rounded-2xl overflow-hidden border border-slate-700/50 bg-[#070b14] shadow-2xl">
         {loading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm z-10">
             <p className="text-slate-400">正在构建关系网...</p>
@@ -799,12 +928,32 @@ function App() {
           ))}
         </nav>
       </aside>
-      <main className="flex-1 p-6 md:p-10 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
         {activeTab === 'ops' && <OpsCenter />}
         {activeTab === 'db' && <IntelligenceDashboard />}
         {activeTab === 'graph' && <TacticalGraph />}
         {activeTab === 'chat' && <CopilotChat />}
       </main>
+        {/* 📱 移动端专属底部导航栏 (只在手机屏幕显示) */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 z-50 flex justify-around items-center h-16 pb-safe shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        {navItems.map(item => (
+          <button
+            key={item.id}
+            onClick={() => setActiveTab(item.id)}
+            className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition-colors ${
+              activeTab === item.id 
+                ? 'text-cyan-400' 
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {/* 克隆图标并调整手机端的大小 */}
+            <div className={`${activeTab === item.id ? 'animate-bounce' : ''}`}>
+              {item.icon}
+            </div>
+            <span className="text-[10px] font-medium">{item.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

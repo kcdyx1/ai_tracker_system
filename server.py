@@ -223,23 +223,24 @@ async def ingest_url(request: Request):
     if not url:
         raise HTTPException(status_code=400, detail="URL 不能为空")
 
-    # 1. 极速写入 SQLite 占位，获取唯一的 task_id
+    # 使用 push_task 函数智能处理重复URL（参考 database.py 的逻辑）
+    success = push_task(url)
+    if not success:
+        # URL 已存在且任务正在处理中，返回成功避免阻塞
+        return {"status": "skipped", "message": "任务已在队列中，跳过重复提交"}
+
+    # 获取刚插入的任务ID
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        # 插入任务并获取自增 ID
-        cursor.execute("""
-            INSERT INTO task_queue (url, status, created_at) 
-            VALUES (?, 'pending', ?)
-        """, (url, datetime.now().isoformat()))
-        task_id = cursor.lastrowid
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        # 如果是因为 URL 重复导致的报错，我们简单处理
-        raise HTTPException(status_code=400, detail="任务已存在或数据库写入失败")
+        cursor.execute("SELECT id FROM task_queue WHERE url = ?", (url,))
+        row = cursor.fetchone()
+        task_id = row['id'] if row else None
     finally:
         conn.close()
+
+    if not task_id:
+        raise HTTPException(status_code=500, detail="无法获取任务ID")
 
     # 2. ⚡️ 核心质变：将任务打入 Redis 队列，让 Celery 异步接管！
     # .delay() 是 Celery 的魔法方法，它会瞬间把参数打包发给 Redis，然后立刻返回
@@ -288,6 +289,57 @@ async def force_enrich_entity(entity_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+from pydantic import BaseModel
+
+# 定义前端传过来的修改数据格式
+# 1. 在接收模型里加上 type 字段
+class EntityOverride(BaseModel):
+    type: str = None  # 👈 新增这一行
+    description: str = None
+    attributes: dict = None
+
+@app.put("/api/entity/{entity_id}")
+async def override_entity(entity_id: str, data: EntityOverride):
+    """L5 级最高指令：人工强行修正档案"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # 提取原档案，这次把 type 也查出来
+        cursor.execute("SELECT type, description, attributes_json FROM entities WHERE id = ?", (entity_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="档案不存在")
+            
+        # 接收新数据或保留旧数据（同时检查 None 和空字符串）
+        new_type = data.type if (data.type is not None and data.type != '') else row['type']
+        new_desc = data.description if data.description is not None else row['description']
+        
+        current_attrs = json.loads(row['attributes_json']) if row['attributes_json'] and row['attributes_json'] != 'null' else {}
+        if data.attributes is not None:
+            current_attrs.update(data.attributes)
+        new_attrs_json = json.dumps(current_attrs, ensure_ascii=False)
+        
+        # 更新 SQLite，加入 type 字段
+        cursor.execute("UPDATE entities SET type = ?, description = ?, attributes_json = ? WHERE id = ?", 
+                       (new_type, new_desc, new_attrs_json, entity_id))
+        conn.commit()
+        conn.close()
+
+        # 更新 Neo4j 图谱 (更新 type 属性)
+        from neo_client import neo_db
+        neo_query = """
+        MATCH (e:Entity {id: $eid})
+        SET e.type = $type, e.description = $desc, e.attributes_json = $attrs
+        RETURN e
+        """
+        neo_db.execute_query(neo_query, {"eid": entity_id, "type": new_type, "desc": new_desc, "attrs": new_attrs_json})
+
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """L3 战略参谋部对话接口"""

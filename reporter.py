@@ -14,6 +14,16 @@ from dotenv import load_dotenv
 import anthropic
 from prompt_templates import REPORTER_SYSTEM_PROMPT
 
+# 配置日志输出带时间戳
+import builtins
+_original_print = builtins.print
+
+def log(*args, **kwargs):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _original_print(f"[{timestamp}]", *args, **kwargs)
+    import sys
+    sys.stdout.flush()
+
 # 1. 加载环境变量
 load_dotenv()
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
@@ -34,7 +44,7 @@ def get_recent_intelligence(days):
     db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
     
     if not os.path.exists(db_path):
-        print(f"⚠️ 致命错误：数据库文件不存在: {db_path}")
+        log(f"⚠️ 致命错误：数据库文件不存在: {db_path}")
         return []
         
     conn = sqlite3.connect(db_path)
@@ -67,7 +77,7 @@ def generate_report_content(events, report_type, report_title):
     # 🚀 核心改动：从外部集中库引入提示词，并动态注入标题
     system_prompt = REPORTER_SYSTEM_PROMPT.format(report_title=report_title)
 
-    print(f"🧠 正在呼叫 MiniMax-M2.7 引擎进行深度战略推演 ({report_type})...")
+    log(f"🧠 正在呼叫 MiniMax-M2.7 引擎进行深度战略推演 ({report_type})...")
     
     try:
         message = client.messages.create(
@@ -78,25 +88,25 @@ def generate_report_content(events, report_type, report_title):
         )
         
         final_text = ""
-        print("-" * 50)
+        log("-" * 50)
         for block in message.content:
             if block.type == "thinking":
-                print(f"🤔 【思维链推演中】:\n{block.thinking[:150]}...\n") 
+                log(f"🤔 【思维链推演中】:\n{block.thinking[:150]}...\n") 
             elif block.type == "text":
                 final_text += block.text
-                print(f"📝 【内参文本生成完毕】")
-        print("-" * 50)
+                log(f"📝 【内参文本生成完毕】")
+        log("-" * 50)
         return final_text
         
     except Exception as e:
-        print(f"❌ 大模型调用致命失败: {e}")
+        log(f"❌ 大模型调用致命失败: {e}")
         return None
     
 
 def send_feishu_card(markdown_content, title_text):
     """发送飞书高级交互式卡片"""
     if not FEISHU_WEBHOOK_URL:
-        print("❌ 错误: 未配置 FEISHU_WEBHOOK_URL")
+        log("❌ 错误: 未配置 FEISHU_WEBHOOK_URL")
         return
 
     payload = {
@@ -115,13 +125,13 @@ def send_feishu_card(markdown_content, title_text):
         }
     }
 
-    print(f"🚀 正在向指挥部推送【{title_text}】...")
+    log(f"🚀 正在向指挥部推送【{title_text}】...")
     try:
         response = requests.post(FEISHU_WEBHOOK_URL, headers={'Content-Type': 'application/json'}, json=payload)
         response.raise_for_status()
-        print(f"✅ 推送成功！飞书响应: {response.json().get('msg')}")
+        log(f"✅ 推送成功！飞书响应: {response.json().get('msg')}")
     except Exception as e:
-        print(f"❌ 推送失败: {e}")
+        log(f"❌ 推送失败: {e}")
 
 if __name__ == "__main__":
     report_type = "daily"
@@ -140,12 +150,12 @@ if __name__ == "__main__":
 
     raw_events = get_recent_intelligence(days=days)
     if raw_events:
-        print(f"📊 {title}：捞取到过去 {days} 天内的 {len(raw_events)} 条原生情报，准备进行大浪淘沙...")
+        log(f"📊 {title}：捞取到过去 {days} 天内的 {len(raw_events)} 条原生情报，准备进行大浪淘沙...")
         report = generate_report_content(raw_events, report_type, title)
         
         if report:
             send_feishu_card(report, title)
         else:
-            print("🛑 报告生成异常，为防止发送错误信息，已自动熔断并取消飞书推送。")
+            log("🛑 报告生成异常，为防止发送错误信息，已自动熔断并取消飞书推送。")
     else:
-        print(f"📭 过去 {days} 天无新增情报，取消推送。")
+        log(f"📭 过去 {days} 天无新增情报，取消推送。")

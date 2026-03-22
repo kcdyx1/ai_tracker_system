@@ -11,6 +11,8 @@ import requests
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from database import get_connection, query_entity_by_id
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
@@ -19,7 +21,7 @@ def search_tavily(query: str) -> str:
     if not api_key:
         raise ValueError("未配置 TAVILY_API_KEY")
     url = "https://api.tavily.com/search"
-    resp = requests.post(url, json={"api_key": api_key, "query": query, "search_depth": "advanced", "max_results": 4}, timeout=20)
+    resp = requests.post(url, json={"api_key": api_key, "query": query, "search_depth": "advanced", "max_results": 4}, timeout=20, verify=False)
     resp.raise_for_status()
     context = ""
     for res in resp.json().get("results", []):
