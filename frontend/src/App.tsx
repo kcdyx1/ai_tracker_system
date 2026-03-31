@@ -666,8 +666,8 @@ const TacticalGraph = () => {
 
   useEffect(() => {
     if (fgRef.current && !loading && graphData.nodes.length > 0) {
-      fgRef.current.d3Force('charge').strength(-120); 
-      fgRef.current.d3Force('link').distance(60);    
+      fgRef.current.d3Force('charge').strength(-60); 
+      fgRef.current.d3Force('link').distance(100);    
       fgRef.current.d3Force('center').strength(0.05); 
     }
   }, [graphData, loading]);
