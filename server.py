@@ -111,6 +111,21 @@ async def get_dashboard_stats():
     finally:
         conn.close()
 
+@app.get("/api/tool/radar")
+async def tool_radar_endpoint(query: str):
+    """供 OpenClaw 直接调用的 REST API 接口"""
+    # 引入底层的 RAG 检索函数
+    from database import get_smart_rag_context
+    try:
+        # 执行图谱与二维表的混合检索
+        context = get_smart_rag_context(query)
+        return {
+            "status": "success", 
+            "data": f"【产业雷达底层检索返回的情报事实】\n\n{context}"
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/graph")
 async def get_graph_data(entity_id: str = None):
     """从 Neo4j 获取图谱的节点(nodes)和连线(links)数据"""

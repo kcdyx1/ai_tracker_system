@@ -74,6 +74,15 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
     except Exception as e:
         return f"❌ 参谋部引擎发生异常: {str(e)}"
 
+# 在 rag.py 中添加
+def get_intelligence_context(query: str):
+    """
+    供 OpenClaw 调用：仅检索底层图谱事实，不进行 LLM 总结
+    """
+    from database import get_smart_rag_context
+    context = get_smart_rag_context(query)
+    return context
+
 if __name__ == "__main__":
     # 简单的本地测试
     print(chat_with_graph("总结一下目前的行业风险"))

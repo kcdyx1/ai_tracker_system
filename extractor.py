@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import time      
+import random
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
@@ -119,13 +121,12 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
     return result
 
 
-def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult:
+def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult:
     """
-    带验证的提取函数
-    
-    如果模型返回结果不符合要求，会自动重试
+    带验证与 MiniMax 强力限流保护的提取函数
     """
     # 获取现有实体库，但只注入文本中实际提到的实体
+    from database import query_all_entities # 确保在作用域内
     existing_entities = query_all_entities()
     text_lower = text.lower()
     
@@ -164,22 +165,37 @@ def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult
             
             # 确保实体不为空
             if not result.entities:
-                print(f"警告: 第 {attempt + 1} 次尝试未提取到实体，正在重试...")
+                print(f"⚠️ 第 {attempt + 1} 次尝试未提取到实体，休眠 2 秒后重试...")
+                time.sleep(2)
                 continue
                 
+            # ✅ 成功提取！核心防御：不论多快，强制休眠 2.5 秒，将基础 QPS 压制在安全线内
+            print("✅ 成功调用 MiniMax API，强制休眠 2.5 秒以保护账户余额与并发额度...")
+            time.sleep(2.5) 
             return result
             
         except Exception as e:
-            error_msg = str(e)
-            print(f"提取失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            error_msg = str(e).lower()
+            print(f"❌ 提取失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             
+            # 🚨 终极防御：精准拦截 429 限流报错
+            if "429" in error_msg or "too many requests" in error_msg or "rate limit" in error_msg:
+                # 指数退避算法：2秒, 4秒, 8秒... 再加上 0~1 秒的随机抖动
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                print(f"🛡️ 触发 MiniMax 官方限流！启动防爆盾，休眠 {wait_time:.1f} 秒后重试...")
+                time.sleep(wait_time)
+                
             # 如果是 token 限制错误，减少上下文重试
-            if "length" in error_msg.lower() or "token" in error_msg.lower():
-                print("检测到 token 限制，缩减上下文后重试...")
-                # 清空上下文，减少输入长度
+            elif "length" in error_msg or "token" in error_msg:
+                print("📉 检测到 token 限制，缩减上下文后休眠重试...")
                 context_entities_str = ""
+                time.sleep(2)
+            else:
+                # 其他网络波动错误
+                time.sleep(2)
             
             if attempt == max_retries - 1:
+                print("☠️ 达到最大重试次数，放弃当前文本！")
                 raise
     
     # 如果所有尝试都失败，返回空结果
@@ -188,7 +204,6 @@ def extract_with_validation(text: str, max_retries: int = 3) -> ExtractionResult
         events=[],
         relationships=[]
     )
-
 
 # ============================================================================
 # 测试代码

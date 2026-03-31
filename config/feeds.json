@@ -26,5 +26,21 @@
     "http://www.woshipm.com/feed",
     "https://www.tmtpost.com/rss",
     "https://www.ithome.com/rss/",
-    "https://www.199it.com/feed"
+    "https://www.199it.com/feed",
+    "https://www.databricks.com/blog/feed",
+  "https://www.snowflake.com/blog/feed/",
+  "https://zilliz.com/blog/rss.xml",
+  "https://qdrant.tech/articles/rss.xml",
+  "https://weaviate.io/blog/rss.xml",
+  
+  "https://blog.langchain.dev/rss/",
+  "https://www.llamaindex.ai/blog/rss.xml",
+  
+  "http://127.0.0.1:1200/jiqizhixin/daily",
+  "http://127.0.0.1:1200/36kr/motif/32768",
+  "http://127.0.0.1:1200/leiphone/category/ai",
+  "http://127.0.0.1:1200/datawhale/news", 
+  
+  "https://buttondown.email/ainews/rss",
+  "https://importai.substack.com/feed"
 ]
