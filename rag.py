@@ -52,7 +52,7 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
     try:
         client = anthropic.Anthropic(
             api_key=api_key,
-            base_url="https://api.minimaxi.com/anthropic"
+            base_url="https://api.minimax.chat/anthropic"
         )
         
         response = client.messages.create(

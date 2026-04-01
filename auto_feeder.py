@@ -24,6 +24,7 @@ def log(*args, **kwargs):
 # 配置路径
 CONFIG_DIR = Path(__file__).parent / "config"
 FEEDS_FILE = CONFIG_DIR / "feeds.json"
+FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 HISTORY_FILE = CONFIG_DIR / "feeder_history.json"
 API_URL = "http://127.0.0.1:8000/api/ingest"
 
@@ -56,6 +57,42 @@ WHITELIST_DOMAINS = [
     "langchain.dev", "llamaindex.ai", "buttondown.email/ainews", "importai.substack.com"
 ]
 
+def load_feeds():
+    """加载feed配置，支持feeds_v2.json的分层结构"""
+    # 优先使用feeds_v2.json
+    if FEEDS_V2_FILE.exists():
+        with open(FEEDS_V2_FILE, "r", encoding="utf-8") as f:
+            try:
+                v2_data = json.load(f)
+                feeds = []
+                tiers = v2_data.get("tiers", {})
+                # 按优先级收集所有feed：core > standard > extended > local
+                tier_order = ["core", "standard", "extended", "local"]
+                for tier_name in tier_order:
+                    tier = tiers.get(tier_name, {})
+                    tier_feeds = tier.get("feeds", [])
+                    for feed in tier_feeds:
+                        url = feed.get("url")
+                        if url and url not in feeds:
+                            feeds.append(url)
+                            log(f"  📦 [{tier_name}] {feed.get('name', url)} - priority:{feed.get('priority', 'N/A')}")
+                if feeds:
+                    log(f"  ✅ 从feeds_v2.json加载了 {len(feeds)} 个源")
+                    return feeds
+            except Exception as e:
+                log(f"  ⚠️ feeds_v2.json解析失败: {e}")
+    # 回退到feeds.json
+    if FEEDS_FILE.exists():
+        with open(FEEDS_FILE, "r", encoding="utf-8") as f:
+            try:
+                feeds = json.load(f)
+                if feeds:
+                    log(f"  ✅ 从feeds.json加载了 {len(feeds)} 个源")
+                    return feeds
+            except:
+                pass
+    return []
+
 def load_json_file(filepath: Path, default_val: list) -> list:
     if not filepath.exists(): return default_val
     with open(filepath, "r", encoding="utf-8") as f:
@@ -65,6 +102,31 @@ def load_json_file(filepath: Path, default_val: list) -> list:
 def save_json_file(filepath: Path, data: list):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_feed_metadata() -> dict:
+    """加载每个feed的最后抓取时间"""
+    metadata_file = HISTORY_FILE.with_name("feeder_metadata.json")
+    if not metadata_file.exists(): return {}
+    with open(metadata_file, "r", encoding="utf-8") as f:
+        try: return json.load(f)
+        except: return {}
+
+def save_feed_metadata(metadata: dict):
+    """保存每个feed的最后抓取时间"""
+    metadata_file = HISTORY_FILE.with_name("feeder_metadata.json")
+    with open(metadata_file, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+def is_newer_than_last_crawl(entry, last_crawl: str) -> bool:
+    """检查entry是否比上次抓取时间更新"""
+    if not last_crawl:
+        return True  # 从未抓取过，放行全量
+    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+        pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+        last_crawl_dt = datetime.fromisoformat(last_crawl)
+        return pub_time > last_crawl_dt
+    return True  # 无法判断时放行
+
 
 def is_after_2023(entry) -> bool:
     """时间闸门：绝对放行 2023 年 1 月 1 日及之后的所有情报"""
@@ -86,7 +148,7 @@ def is_high_value_intel(title: str, summary: str, content: str, url: str) -> boo
             
     return False
 
-def parse_feed(feed_url: str, history: set) -> list:
+def parse_feed(feed_url: str, history: set, last_crawl: str = None) -> list:
     try:
         feed = feedparser.parse(feed_url)
         if not feed.entries: return []
@@ -103,6 +165,10 @@ def parse_feed(feed_url: str, history: set) -> list:
                 content = entry.content[0].value
                 
             if not url or url in history:
+                continue
+
+            # 增量更新：跳过上次抓取时间之前的旧内容
+            if not is_newer_than_last_crawl(entry, last_crawl):
                 continue
                 
             # 严格执行 2023 年时间线底线，并过滤硬核内容
@@ -132,9 +198,10 @@ def run_auto_feeder():
     log("🚀 AI Tracker - 战略巡航舰启动 (V4 历史全收录模式, Base: 2023-01-01)")
     log("=" * 60)
     
-    feeds = load_json_file(FEEDS_FILE, [])
+    log("📡 加载情报源...")
+    feeds = load_feeds()
     if not feeds:
-        log("❌ 弹药库 (feeds.json) 为空！")
+        log("❌ 弹药库 (feeds.json 和 feeds_v2.json) 都为空！")
         return
         
     history_list = load_json_file(HISTORY_FILE, [])
@@ -143,9 +210,22 @@ def run_auto_feeder():
     total_pushed = 0
     new_history = list(history_list)
     
+    # 增量更新：加载每个feed的最后抓取时间
+    feed_metadata = load_feed_metadata()
+    new_metadata = dict(feed_metadata)  # 复制一份用于更新
+
     for feed_url in feeds:
         log(f"\n📡 正在扫描空域: {feed_url}")
-        target_urls = parse_feed(feed_url, history_set)
+        last_crawl = feed_metadata.get(feed_url)
+        if last_crawl:
+            log(f"   ⏰ 上次抓取: {last_crawl}，增量模式")
+        else:
+            log(f"   🆕 首次抓取，全量模式")
+
+        target_urls = parse_feed(feed_url, history_set, feed_metadata.get(feed_url))
+        # 更新该feed的抓取时间
+        new_metadata[feed_url] = datetime.now().isoformat()
+
         
         for url in target_urls:
             log(f"    -> 锁定目标: {url}")
@@ -159,9 +239,12 @@ def run_auto_feeder():
     if len(new_history) > 100000:
         new_history = new_history[-100000:]
         
+    # 保存URL历史
     save_json_file(HISTORY_FILE, new_history)
+    # 保存每个feed的最后抓取时间
+    save_feed_metadata(new_metadata)
     log("=" * 60)
-    log(f"🎉 巡航结束！本次成功向 V8 引擎输送了 {total_pushed} 篇历史深层情报。")
+    log(f"🎉 巡航结束！本次成功向 V8 引擎输送了 {total_pushed} 篇情报。")
 
 if __name__ == "__main__":
     run_auto_feeder()

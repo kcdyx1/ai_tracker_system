@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 import os
 from datetime import datetime
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import Request, HTTPException
 # ... 其他 import
 from database import (
     init_db, push_task, get_pending_task, update_task_status,
@@ -76,6 +76,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+# 添加请求日志中间件
+@app.middleware("http")
+async def log_requests(request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    start_time = time.time()
+
+    # 记录请求
+    logger.info(f"请求: {request.method} {request.url.path} from {client_ip}")
+
+    # 检查限流
+    if not check_rate_limit(client_ip):
+        logger.warning(f"限流触发: {client_ip}")
+        return JSONResponse(status_code=429, content={"detail": "请求过于频繁，请稍后再试"})
+
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    logger.info(f"响应: {response.status_code} ({process_time:.3f}s)")
+    return response
+
 class IngestRequest(BaseModel):
     url: str
 
@@ -90,6 +111,16 @@ class ChatRequest(BaseModel):
 # ============================================================================
 # API 路由 (为 React 前端供货)
 # ============================================================================
+@app.get("/api/health")
+async def health_check():
+    """健康检查端点"""
+    from datetime import datetime
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "AI Tracker System"
+    }
+
 @app.get("/api/stats")
 async def get_dashboard_stats():
     """获取大盘统计数据"""
@@ -142,13 +173,23 @@ async def get_graph_data(entity_id: str = None):
             """
             params = {"entity_id": entity_id}
         else:
-            # 💡 核心升级：全局大盘，拉取最核心的拓扑结构
+            # 💡 核心升级 V2：真正的“内阁精英网” (Elite Core Network)
+            # 战术逻辑：
+            # 1. 先扫描全量数据库，找出“关系线最多、影响力最大”的前 100 名大佬。
+            # 2. 将这 100 人圈进一个叫 elite_nodes 的高级 VIP 房间。
+            # 3. 核心大招：【只画出这 100 人互相之间的连线】。把房间外无关紧要的杂鱼全部过滤掉！
             query = """
-            MATCH (s:Entity)-[r]->(t:Entity)
+            MATCH (n:Entity)
+            WITH n, COUNT { (n)--() } AS degree
+            ORDER BY degree DESC
+            LIMIT 100
+            WITH collect(n) AS elite_nodes
+            UNWIND elite_nodes AS s
+            MATCH (s)-[r]-(t:Entity)
+            WHERE t IN elite_nodes AND s.id < t.id
             RETURN s.id AS source_id, s.name AS source_name, s.type AS source_type,
                    type(r) AS rel_type,
                    t.id AS target_id, t.name AS target_name, t.type AS target_type
-            LIMIT 300
             """
             params = {}
 
@@ -212,6 +253,408 @@ async def get_entity_details(entity_id: str):
         # 捞取与该实体相关的最新 10 条事件
         events = get_events_for_entity(entity_id)
         return {"entity": entity, "events": events[:10]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/entity/{entity_id}/competitors")
+async def get_entity_competitors(entity_id: str):
+    """获取实体的竞品列表（通过COMPETES_WITH关系）"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 查询竞争对手
+        cursor.execute("""
+            SELECT e.id, e.name, e.type, e.description
+            FROM relationships r
+            JOIN entities e ON (
+                (r.source_id = ? AND r.target_id = e.id) OR
+                (r.target_id = ? AND r.source_id = e.id)
+            )
+            WHERE r.relation_type = 'COMPETES_WITH'
+        """, (entity_id, entity_id))
+        competitors = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+        return {"entity_id": entity_id, "competitors": competitors}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/entity/{entity_id}/timeline")
+async def get_entity_timeline(entity_id: str, limit: int = 20):
+    """获取实体的时序事件流"""
+    try:
+        from datetime import timedelta
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 获取实体信息
+        entity = query_entity_by_id(entity_id)
+        if not entity:
+            raise HTTPException(status_code=404, detail="实体不存在")
+
+        # 获取该实体相关的事件，按时间排序
+        cursor.execute("""
+            SELECT e.id, e.title, e.date, e.summary, e.risk_level, e.sentiment
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ?
+            ORDER BY e.date DESC
+            LIMIT ?
+        """, (entity_id, limit))
+        events = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+        return {"entity": entity, "timeline": events}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/trending")
+async def get_trending_entities(limit: int = 10):
+    """
+    获取本周热点分析报告
+
+    返回：
+    - entities: 热点实体排行
+    - products: 新兴产品（近30天首次出现的产品）
+    - tech_trends: 技术热点
+    - companies: 公司活跃度排行
+    - risk_alerts: 高风险事件摘要
+    """
+    try:
+        from datetime import timedelta
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        month_ago = (datetime.now() - timedelta(days=30)).isoformat()
+
+        result = {"period_days": 7}
+
+        # 1. 热点实体排行
+        cursor.execute("""
+            SELECT e.id, e.name, e.type,
+                   COUNT(*) as event_count
+            FROM events evt
+            JOIN json_each(evt.involved_entities_json) j
+            JOIN entities e ON j.value = e.id
+            WHERE evt.date >= ?
+            GROUP BY e.id
+            ORDER BY event_count DESC
+            LIMIT ?
+        """, (week_ago, limit))
+
+        result["entities"] = [
+            {"id": row[0], "name": row[1], "type": row[2], "event_count": row[3]}
+            for row in cursor.fetchall()
+        ]
+
+        # 2. 新兴产品（近30天首次出现的产品）
+        cursor.execute("""
+            SELECT e.id, e.name, e.description
+            FROM entities e
+            WHERE e.type = 'product'
+              AND e.created_at >= ?
+            ORDER BY e.created_at DESC
+            LIMIT ?
+        """, (month_ago, limit))
+
+        result["products"] = [
+            {"id": row[0], "name": row[1], "description": row[2] or ""}
+            for row in cursor.fetchall()
+        ]
+
+        # 3. 技术热点（最常见的tech_concept类型实体）
+        cursor.execute("""
+            SELECT e.id, e.name,
+                   COUNT(*) as mention_count
+            FROM events evt
+            JOIN json_each(evt.involved_entities_json) j
+            JOIN entities e ON j.value = e.id
+            WHERE evt.date >= ? AND e.type = 'tech_concept'
+            GROUP BY e.id
+            ORDER BY mention_count DESC
+            LIMIT ?
+        """, (week_ago, limit))
+
+        result["tech_trends"] = [
+            {"id": row[0], "name": row[1], "mention_count": row[2]}
+            for row in cursor.fetchall()
+        ]
+
+        # 4. 公司活跃度（事件最多的公司）
+        cursor.execute("""
+            SELECT e.id, e.name,
+                   COUNT(*) as event_count
+            FROM events evt
+            JOIN json_each(evt.involved_entities_json) j
+            JOIN entities e ON j.value = e.id
+            WHERE evt.date >= ? AND e.type = 'company'
+            GROUP BY e.id
+            ORDER BY event_count DESC
+            LIMIT ?
+        """, (week_ago, limit))
+
+        result["companies"] = [
+            {"id": row[0], "name": row[1], "event_count": row[2]}
+            for row in cursor.fetchall()
+        ]
+
+        # 5. 高风险事件（risk_level = 高危/中风险）
+        cursor.execute("""
+            SELECT e.id, e.name,
+                   evt.title, evt.date, evt.risk_level
+            FROM events evt
+            JOIN json_each(evt.involved_entities_json) j
+            JOIN entities e ON j.value = e.id
+            WHERE evt.date >= ?
+              AND evt.risk_level IN ('高危', '中风险')
+            ORDER BY evt.date DESC
+            LIMIT ?
+        """, (week_ago, 5))
+
+        result["risk_alerts"] = [
+            {
+                "entity": {"id": row[0], "name": row[1]},
+                "event_title": row[2],
+                "date": row[3],
+                "risk_level": row[4]
+            }
+            for row in cursor.fetchall()
+        ]
+
+        conn.close()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/entity/{entity_id}/conflicts")
+async def detect_entity_conflicts(entity_id: str):
+    """
+    检测实体的知识冲突
+
+    检查同一实体在不同事件中是否存在矛盾信息：
+    - 同一关系的矛盾描述（如"投资"vs"不投资"）
+    - 日期/数字的矛盾
+    - 情感极性冲突（利好vs利空）
+    """
+    try:
+        from datetime import timedelta
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 获取实体信息
+        entity = query_entity_by_id(entity_id)
+        if not entity:
+            raise HTTPException(status_code=404, detail="实体不存在")
+
+        # 获取该实体相关的所有关系
+        cursor.execute("""
+            SELECT r.id, r.relation_type, r.source_id, r.target_id,
+                   r.evidence, r.start_date, r.end_date,
+                   e1.name as source_name, e2.name as target_name
+            FROM relationships r
+            JOIN entities e1 ON r.source_id = e1.id
+            JOIN entities e2 ON r.target_id = e1.id
+            WHERE r.source_id = ? OR r.target_id = ?
+        """, (entity_id, entity_id))
+
+        relationships = []
+        for row in cursor.fetchall():
+            relationships.append({
+                "id": row[0],
+                "relation_type": row[1],
+                "source_id": row[2],
+                "target_id": row[3],
+                "evidence": row[4],
+                "start_date": row[5],
+                "end_date": row[6],
+                "source_name": row[7],
+                "target_name": row[8]
+            })
+
+        # 获取该实体相关的事件及其情感极性
+        cursor.execute("""
+            SELECT e.id, e.title, e.date, e.sentiment, e.risk_level,
+                   e.involved_entities_json
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ?
+            ORDER BY e.date DESC
+            LIMIT 50
+        """, (entity_id,))
+
+        events = []
+        sentiments = []
+        for row in cursor.fetchall():
+            sentiments.append(row[4])  # sentiment
+            events.append({
+                "id": row[0],
+                "title": row[1],
+                "date": row[2],
+                "sentiment": row[3],
+                "risk_level": row[4]
+            })
+
+        # 检测情感冲突
+        sentiment_conflicts = []
+        if sentiments:
+            positive = sentiments.count("利好")
+            negative = sentiments.count("利空")
+            if positive > 0 and negative > 0:
+                sentiment_conflicts.append({
+                    "type": "sentiment_conflict",
+                    "positive_count": positive,
+                    "negative_count": negative,
+                    "description": f"该实体同时存在 {positive} 条利好和 {negative} 条利空事件"
+                })
+
+        # 检测关系冲突（同一实体对有多个矛盾关系）
+        relation_map = {}
+        for rel in relationships:
+            key = (rel["source_id"], rel["target_id"])
+            if key not in relation_map:
+                relation_map[key] = []
+            relation_map[key].append(rel)
+
+        relation_conflicts = []
+        for key, rels in relation_map.items():
+            rel_types = set(r["relation_type"] for r in rels)
+            # 检测矛盾关系对
+            contradictory_pairs = [
+                ("INVESTED", "COMPETES_WITH"),
+                ("PARTNERS", "COMPETES_WITH"),
+                ("ACQUIRED", "FOUNDED"),
+            ]
+            for pair in contradictory_pairs:
+                if pair[0] in rel_types and pair[1] in rel_types:
+                    relation_conflicts.append({
+                        "type": "relation_conflict",
+                        "entities": key,
+                        "conflicting_types": list(rel_types),
+                        "description": f"同一实体对同时存在 {pair[0]} 和 {pair[1]} 关系"
+                    })
+
+        conn.close()
+
+        return {
+            "entity": entity,
+            "sentiment_conflicts": sentiment_conflicts,
+            "relation_conflicts": relation_conflicts,
+            "total_events": len(events),
+            "total_relationships": len(relationships)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/entity/{entity_id}/insights")
+async def get_entity_insights(entity_id: str):
+    """
+    获取实体的深度洞察摘要
+
+    综合分析实体的：
+    - 整体情感倾向
+    - 关系网络密度
+    - 活跃度趋势
+    - 关键事件时间线
+    """
+    try:
+        from datetime import timedelta
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        entity = query_entity_by_id(entity_id)
+        if not entity:
+            raise HTTPException(status_code=404, detail="实体不存在")
+
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        month_ago = (datetime.now() - timedelta(days=30)).isoformat()
+
+        # 近7天事件数
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ? AND e.date >= ?
+        """, (entity_id, week_ago))
+        recent_events = cursor.fetchone()[0]
+
+        # 近30天事件数
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ? AND e.date >= ?
+        """, (entity_id, month_ago))
+        monthly_events = cursor.fetchone()[0]
+
+        # 关系总数
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM relationships
+            WHERE source_id = ? OR target_id = ?
+        """, (entity_id, entity_id))
+        total_relations = cursor.fetchone()[0]
+
+        # 情感统计
+        cursor.execute("""
+            SELECT sentiment, COUNT(*)
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ? AND e.sentiment IS NOT NULL
+            GROUP BY sentiment
+        """, (entity_id,))
+        sentiment_stats = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # 高风险事件
+        cursor.execute("""
+            SELECT e.title, e.date, e.risk_level
+            FROM events e
+            JOIN json_each(e.involved_entities_json) j
+            WHERE j.value = ? AND e.risk_level = '高危'
+            ORDER BY e.date DESC
+            LIMIT 3
+        """, (entity_id,))
+        high_risk_events = [{"title": row[0], "date": row[1]} for row in cursor.fetchall()]
+
+        conn.close()
+
+        # 计算活跃度趋势
+        activity_trend = "stable"
+        if recent_events > monthly_events / 4:
+            activity_trend = "rising"
+        elif recent_events < monthly_events / 10:
+            activity_trend = "declining"
+
+        # 计算整体情感
+        overall_sentiment = "neutral"
+        positive = sentiment_stats.get("利好", 0)
+        negative = sentiment_stats.get("利空", 0)
+        if positive > negative * 2:
+            overall_sentiment = "positive"
+        elif negative > positive * 2:
+            overall_sentiment = "negative"
+
+        return {
+            "entity": entity,
+            "activity": {
+                "recent_events_7d": recent_events,
+                "monthly_events_30d": monthly_events,
+                "trend": activity_trend
+            },
+            "relationships": {
+                "total": total_relations
+            },
+            "sentiment": {
+                "overall": overall_sentiment,
+                "positive": positive,
+                "negative": negative,
+                "neutral": sentiment_stats.get("中性", 0)
+            },
+            "high_risk_events": high_risk_events
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -365,8 +808,128 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+from fastapi.responses import StreamingResponse
+import csv
+import io
+
+@app.get("/api/export")
+async def export_data(format: str = "json", entity_type: str = None, days: int = 30):
+    """
+    导出数据为 JSON 或 CSV 格式
+
+    参数:
+    - format: json 或 csv
+    - entity_type: 过滤实体类型 (company, product, person, tech_concept)
+    - days: 只导出近N天的事件 (默认30天)
+    """
+    try:
+        from datetime import timedelta
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
+
+        if format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            writer.writerow(["id", "type", "name", "description", "created_at"])
+
+            if entity_type:
+                cursor.execute("SELECT id, type, name, description, created_at FROM entities WHERE type = ?", (entity_type,))
+            else:
+                cursor.execute("SELECT id, type, name, description, created_at FROM entities")
+
+            for row in cursor.fetchall():
+                writer.writerow([row[0], row[1], row[2], row[3] or "", row[4]])
+
+            writer.writerow([])
+            writer.writerow(["source_id", "target_id", "relation_type", "evidence"])
+            cursor.execute("SELECT source_id, target_id, relation_type, evidence FROM relationships")
+            for row in cursor.fetchall():
+                writer.writerow([row[0], row[1], row[2], row[3] or ""])
+
+            conn.close()
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=ai_tracker_export_{datetime.now().strftime('%Y%m%d')}.csv"}
+            )
+        else:
+            result = {"export_time": datetime.now().isoformat(), "entities": [], "relationships": [], "events": []}
+
+            if entity_type:
+                cursor.execute("SELECT id, type, name, description, created_at, aliases_json, attributes_json FROM entities WHERE type = ?", (entity_type,))
+            else:
+                cursor.execute("SELECT id, type, name, description, created_at, aliases_json, attributes_json FROM entities")
+
+            for row in cursor.fetchall():
+                result["entities"].append({
+                    "id": row[0], "type": row[1], "name": row[2], "description": row[3],
+                    "created_at": row[4],
+                    "aliases": json.loads(row[5]) if row[5] and row[5] not in ('null', '') else [],
+                    "attributes": json.loads(row[6]) if row[6] and row[6] not in ('null', '') else {}
+                })
+
+            cursor.execute("SELECT source_id, target_id, relation_type, evidence FROM relationships")
+            for row in cursor.fetchall():
+                result["relationships"].append({"source_id": row[0], "target_id": row[1], "relation_type": row[2], "evidence": row[3]})
+
+            cursor.execute("SELECT id, title, date, published_date, summary, source_url, risk_level, sentiment FROM events WHERE date >= ?", (time_threshold,))
+            for row in cursor.fetchall():
+                result["events"].append({"id": row[0], "title": row[1], "date": row[2], "published_date": row[3], "summary": row[4], "source_url": row[5], "risk_level": row[6], "sentiment": row[7]})
+
+            conn.close()
+            return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+import logging
+from pathlib import Path
+from collections import defaultdict
+from datetime import datetime, timedelta
+import time
+
+# 配置日志持久化
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+log_file = LOG_DIR / f"server_{datetime.now().strftime('%Y%m%d')}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# 简易API限流（每个IP每分钟最多100次请求）
+rate_limit_store = defaultdict(list)
+
+def check_rate_limit(client_ip: str, max_requests: int = 100, window_seconds: int = 60) -> bool:
+    """检查IP是否超过限流阈值"""
+    now = datetime.now()
+    # 清理过期记录
+    rate_limit_store[client_ip] = [
+        t for t in rate_limit_store[client_ip]
+        if now - t < timedelta(seconds=window_seconds)
+    ]
+    # 检查是否超限
+    if len(rate_limit_store[client_ip]) >= max_requests:
+        return False
+    # 记录本次请求
+    rate_limit_store[client_ip].append(now)
+    return True
+
+
 
 # ============================================================================
 # 部署挂载：让 FastAPI 接管 React 编译后的前端页面
@@ -386,6 +949,8 @@ if frontend_dist_path.exists():
         return {"error": "Frontend build not found."}
 else:
     print("⚠️ 警告: 未找到前端 dist 目录，请确在 frontend 目录下执行了 npm run build")
+
+
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

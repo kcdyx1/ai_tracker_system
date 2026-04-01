@@ -73,16 +73,22 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
     
     raw_text = ""
     for block in msg.content:
-        if block.type == "thinking":
-            print(f"  🤔 [思维链]: {block.thinking[:45].replace(chr(10), '')}...") 
-        elif block.type == "text":
+        block_type = getattr(block, "type", "")
+        if block_type == "thinking" and hasattr(block, "thinking"):
+            thinking_preview = str(block.thinking)[:45].replace("\n", "")
+            print(f"  🤔 [思维链]: {thinking_preview}...")
+        elif block_type == "text":
+            raw_text += getattr(block, "text", "")
             raw_text += block.text
             
     match = re.search(r'\{[\s\S]*\}', raw_text)
     if match: raw_text = match.group(0)
         
     try:
-        dump = json.loads(raw_text)
+        try:
+            dump = json.loads(raw_text)
+        except json.JSONDecodeError:
+            dump = {}
     except json.JSONDecodeError:
         return {"description": None, "attributes": {}}
 
@@ -119,7 +125,10 @@ def run_enrichment(entity_id: str) -> dict:
         
         conn = get_connection(); cursor = conn.cursor()
         old_attr_str = entity.get('attributes_json')
-        current_attrs = json.loads(old_attr_str) if old_attr_str and old_attr_str != "null" else {}
+        try:
+            current_attrs = json.loads(old_attr_str) if old_attr_str and old_attr_str != "null" else {}
+        except json.JSONDecodeError:
+            current_attrs = {}
         
         if fused_data['attributes']: current_attrs.update(fused_data['attributes'])
         new_desc = fused_data['description'] or entity.get('description', '')

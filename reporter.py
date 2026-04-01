@@ -56,8 +56,13 @@ def get_recent_intelligence(days):
     cursor.execute(f"""
         SELECT title, summary, risk_level, sentiment, source_url 
         FROM events 
-        WHERE created_at >= ? 
-        ORDER BY id DESC LIMIT {fetch_limit}
+        WHERE published_date >= ?
+          AND published_date <= datetime('now', '+7 days')
+          AND published_date >= '2020-01-01' 
+        ORDER BY
+          CASE WHEN source_url IS NOT NULL AND source_url != '' THEN 0 ELSE 1 END,
+          published_date DESC
+        LIMIT {fetch_limit}
     """, (time_threshold,))
     
     events = cursor.fetchall()
@@ -70,7 +75,7 @@ def generate_report_content(events, report_type, report_title):
         return f"📡 **{report_title}**：雷达静默，设定周期内未捕获到情报。"
 
     context = "\n\n".join([
-        f"事件: {e[0]}\n摘要: {e[1]}\n风险评估: {e[2] or '无'}" 
+        f"[{e[5][:10] if e[5] else '未知'}] {e[0]}\n摘要: {e[1]}\n风险: {e[2] or '无'} | 来源: {e[4] or '无'}" 
         for e in events
     ])
 

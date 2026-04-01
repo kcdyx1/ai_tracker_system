@@ -121,6 +121,84 @@ def init_db() -> None:
     finally:
         conn.close()
 
+
+# 预建跨语言别名映射（AI行业常见）
+ALIAS_MAPPINGS = {
+    # 公司别名
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google": "Google",
+    "meta": "Meta",
+    "microsoft": "Microsoft",
+    "nvidia": "NVIDIA",
+    "英伟达": "NVIDIA",
+    "谷歌": "Google",
+    "脸书": "Meta",
+    "苹果": "Apple",
+    "百度": "Baidu",
+    "阿里巴巴": "Alibaba",
+    "腾讯": "Tencent",
+    "字节跳动": "ByteDance",
+    "字节": "ByteDance",
+    # 产品别名
+    "gpt4": "GPT-4",
+    "gpt-4": "GPT-4",
+    "gpt4o": "GPT-4o",
+    "chatgpt": "ChatGPT",
+    "claude3": "Claude 3",
+    "claude 3": "Claude 3",
+    "claude2": "Claude 2",
+    "claude 2": "Claude 2",
+    "llama2": "LLaMA 2",
+    "llama 2": "LLaMA 2",
+    "llama3": "LLaMA 3",
+    "llama 3": "LLaMA 3",
+    # 技术别名
+    "大模型": "LLM",
+    "llm": "LLM",
+    "大型语言模型": "LLM",
+    "人工智能": "AI",
+    "机器学习": "ML",
+    "深度学习": "Deep Learning",
+}
+
+def normalize_for_match(text: str) -> str:
+    """标准化文本用于匹配：转小写、移除空格和标点"""
+    import re
+    text = text.lower().strip()
+    text = re.sub(r'[\s\-_–—.,，、。]', '', text)
+    return text
+
+def find_entity_by_alias(name: str, entity_type: str, name_type_to_id: dict, all_aliases: dict) -> str:
+    """通过名称或别名查找已有实体的规范ID"""
+    import re
+
+    # 1. 直接检查 (name, type)
+    if (name, entity_type) in name_type_to_id:
+        return name_type_to_id[(name, entity_type)]
+
+    # 2. 检查别名映射表
+    normalized = normalize_for_match(name)
+    for alias, canonical in ALIAS_MAPPINGS.items():
+        if normalize_for_match(alias) == normalized:
+            if (canonical, entity_type) in name_type_to_id:
+                return name_type_to_id[(canonical, entity_type)]
+
+    # 3. 检查所有实体的别名列表
+    name_lower = name.lower()
+    for existing_name, existing_type, existing_id in all_aliases:
+        if existing_type != entity_type:
+            continue
+        if normalize_for_match(existing_name) == normalized:
+            return existing_id
+        # 检查现有别名列表
+        if existing_id in all_aliases:
+            for alias in all_aliases[existing_id]:
+                if normalize_for_match(alias) == normalized:
+                    return existing_id
+
+    return None
+
 def save_extraction_result(result: ExtractionResult) -> None:
     conn = get_connection()
     try:
@@ -141,15 +219,27 @@ def save_extraction_result(result: ExtractionResult) -> None:
             attributes = {k: v for k, v in entity_dict.items() if k not in base_keys and v is not None and v != []}
             
             # 关键：同名同类实体复用已有ID，从根源上防止重复
-            canonical_id = name_type_to_id.get((entity.name, entity_type))
+            # 增强版：也检查别名和跨语言映射
+            all_aliases = {}  # 已有的别名映射 {id: [aliases]}
+            for row in cursor.execute("SELECT id, aliases_json FROM entities WHERE type = ?", (entity_type,)):
+                if row[1] and row[1] not in ('null', ''):
+                    try:
+                        all_aliases[row[0]] = json.loads(row[1])
+                    except:
+                        all_aliases[row[0]] = []
+
+            canonical_id = find_entity_by_alias(entity.name, entity_type, name_type_to_id, all_aliases)
             use_id = canonical_id if canonical_id else entity.id
-            
+
             if canonical_id:
                 # 已有实体：补充缺失的属性字段（不覆盖已有非空字段）
                 cursor.execute("SELECT attributes_json, description FROM entities WHERE id = ?", (canonical_id,))
                 row = cursor.fetchone()
                 if row:
-                    existing_attrs = json.loads(row[0]) if row[0] and row[0] not in ('null', '') else {}
+                    try:
+                        existing_attrs = json.loads(row[0]) if row[0] and row[0] not in ('null', '') else {}
+                    except json.JSONDecodeError:
+                        existing_attrs = {}
                     existing_desc = row[1] or ''
                     # 补充新属性
                     for k, v in attributes.items():

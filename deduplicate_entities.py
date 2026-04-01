@@ -41,7 +41,10 @@ def merge_entities():
             if desc and desc != 'null' and len(str(desc)) > 5: score += 2
             if attrs_str and attrs_str != 'null':
                 try:
-                    attrs = json.loads(attrs_str)
+                    try:
+                        attrs = json.loads(attrs_str)
+                    except json.JSONDecodeError:
+                        attrs = {}
                     score += len([v for v in attrs.values() if v and str(v) not in ('[]', '{}', 'null', 'None', '')])
                 except: pass
             return score
@@ -93,7 +96,10 @@ def merge_entities():
         for event_id, json_str in c.fetchall():
             if not json_str or json_str == 'null': continue
             try:
-                ids = json.loads(json_str)
+                try:
+                    ids = json.loads(json_str)
+                except json.JSONDecodeError:
+                    ids = []
                 if dup_id in ids:
                     ids = [keep_id if i == dup_id else i for i in ids]
                     # 去重
@@ -107,14 +113,20 @@ def merge_entities():
         # 3. 合并 attributes：副本中的额外属性合并到保留实体
         c.execute("SELECT attributes_json FROM entities WHERE id = ?", (keep_id,))
         keep_attrs_str = c.fetchone()[0]
-        keep_attrs = json.loads(keep_attrs_str) if keep_attrs_str and keep_attrs_str not in ('null', '') else {}
+        try:
+            keep_attrs = json.loads(keep_attrs_str) if keep_attrs_str and keep_attrs_str not in ('null', '') else {}
+        except json.JSONDecodeError:
+            keep_attrs = {}
 
         for dup_id in dup_ids:
             c.execute("SELECT attributes_json FROM entities WHERE id = ?", (dup_id,))
             dup_attrs_str = c.fetchone()[0]
             if dup_attrs_str and dup_attrs_str not in ('null', ''):
                 try:
-                    dup_attrs = json.loads(dup_attrs_str)
+                    try:
+                        dup_attrs = json.loads(dup_attrs_str)
+                    except json.JSONDecodeError:
+                        dup_attrs = {}
                     for k, v in dup_attrs.items():
                         if k not in keep_attrs or keep_attrs[k] in (None, '', '[]'):
                             keep_attrs[k] = v

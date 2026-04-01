@@ -627,6 +627,8 @@ const TacticalGraph = () => {
   const [selectedNode, setSelectedNode] = useState<any>(null);
   const [nodeDetails, setNodeDetails] = useState<any>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
   
   const fgRef = useRef<any>(null);
   const graphContainerRef = useRef<HTMLDivElement>(null);
@@ -734,6 +736,26 @@ const TacticalGraph = () => {
       setDetailsLoading(false);
     }
   }, []);
+  // 搜索节点
+  const handleSearch = useCallback((query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    const results = graphData.nodes.filter((n: any) =>
+      n.name.toLowerCase().includes(query.toLowerCase())
+    ).slice(0, 10);
+    setSearchResults(results);
+  }, [graphData.nodes]);
+
+  // 点击搜索结果
+  const handleSearchResultClick = useCallback((node: any) => {
+    setSearchQuery('');
+    setSearchResults([]);
+    handleNodeClick(node);
+  }, [handleNodeClick]);
+
+
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 h-[calc(100vh-80px)] flex flex-col">
@@ -752,7 +774,33 @@ const TacticalGraph = () => {
                 {type.toUpperCase()}
               </span>
             ))}
+          
+          {/* 搜索框 */}
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); handleSearch(e.target.value); }}
+              placeholder="搜索节点..."
+              className="w-48 px-3 py-1.5 text-xs bg-slate-800 border border-slate-700 rounded-md focus:outline-none focus:border-indigo-500 text-slate-200 placeholder-slate-500"
+            />
+            {searchResults.length > 0 && (
+              <div className="absolute top-full mt-1 w-full bg-slate-800 border border-slate-700 rounded-md shadow-xl z-50 max-h-60 overflow-y-auto">
+                {searchResults.map((node: any) => (
+                  <button
+                    key={node.id}
+                    onClick={() => handleSearchResultClick(node)}
+                    className="w-full px-3 py-2 text-left text-xs hover:bg-slate-700 flex items-center gap-2 border-b border-slate-700 last:border-b-0"
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorMap[node.type] || '#fff' }}></span>
+                    <span className="text-slate-200">{node.name}</span>
+                    <span className="text-slate-500 text-[10px]">{node.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+</div>
           <button
             onClick={handleExportImage}
             className="flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 hover:text-white transition-colors"

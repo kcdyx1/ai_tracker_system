@@ -121,6 +121,63 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
     return result
 
 
+
+def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
+    """
+    提取质量门禁：过滤低质量、无关、日期异常的事件
+    """
+    from datetime import datetime, timedelta
+
+    # AI/科技相关关键词（用于过滤无关内容）
+    ai_keywords = [
+        "ai", "artificial intelligence", "machine learning", "deep learning",
+        "neural network", "llm", "gpt", "claude", "openai", "anthropic",
+        "模型", "人工智能", "大模型", "算法", "芯片", "gpu", "nvidia",
+        "agent", "rag", "embedding", "transformer", "nlp", "cv",
+        "robot", "自动驾驶", "智能体", "机器学习", "深度学习",
+        "startup", "funding", " Series ", "Series A", "Series B",
+        "acquisition", "merger", "ipo", "public", "launch", "release"
+    ]
+
+    # 日期边界
+    min_date = datetime(2020, 1, 1)
+    max_date = datetime.now() + timedelta(days=7)
+
+    valid_events = []
+    for event in result.events:
+        # 1. 日期校验
+        try:
+            event_date = event.date
+            if hasattr(event_date, 'year'):
+                if event_date < min_date or event_date > max_date:
+                    print(f"⚠️ 过滤异常日期事件: {event.title[:30]}... (日期: {event_date.year})")
+                    continue
+        except:
+            pass
+
+        # 2. 相关性校验 - 检查标题和摘要是否包含AI相关关键词
+        text_to_check = (event.title + " " + event.summary).lower()
+        is_relevant = any(kw.lower() in text_to_check for kw in ai_keywords)
+        if not is_relevant:
+            # 再检查实体类型 - 如果有关联的公司/产品/技术实体，也认为是相关的
+            if event.involved_entity_ids:
+                # 有关联实体，保留
+                pass
+            else:
+                print(f"⚠️ 过滤低相关事件: {event.title[:30]}...")
+                continue
+
+        # 3. 来源校验 - 有来源URL的事件优先保留
+        # 这可以作为后续排序依据，这里先不过滤
+
+        valid_events.append(event)
+
+    print(f"✅ 质量门禁: {len(result.events)} -> {len(valid_events)} 有效事件")
+
+    # 返回过滤后的事件
+    result.events = valid_events
+    return result
+
 def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
@@ -172,6 +229,10 @@ def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult
             # ✅ 成功提取！核心防御：不论多快，强制休眠 2.5 秒，将基础 QPS 压制在安全线内
             print("✅ 成功调用 MiniMax API，强制休眠 2.5 秒以保护账户余额与并发额度...")
             time.sleep(2.5) 
+
+            # 🛡️ 质量门禁：过滤低质量、异常日期、无关事件
+            result = validate_extraction_result(result)
+
             return result
             
         except Exception as e:
