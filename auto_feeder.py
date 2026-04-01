@@ -46,7 +46,7 @@ AI_KEYWORDS = [
     "算力", "数据中心", "液冷", "边缘计算", "edge computing",
     "open source", "开源", "huggingface", "github", "local deployment", "本地部署", "算力集群",
     "parameters", "参数量", "context window", "上下文", 
-    "fine-tuning", "微调", "rlhf", "dpo", "lora", "量化", "quantization", "prompt", "提示词"
+    "fine-tuning", "微调", "rlhf", "dpo", "lora", "量化", "quantization", "prompt", "提示词", "数据集", "数据"
 ]
 
 # 现代数据栈与前沿基建白名单
