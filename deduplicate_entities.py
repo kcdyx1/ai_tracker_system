@@ -12,7 +12,10 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-DB = "ai_tracker.db"
+import sys
+sys.path.insert(0, "/home/kangchen/.openclaw/workspace/ai_tracker_system")
+from database import DB_PATH
+DB = DB_PATH
 
 
 def _safe_json_loads(json_str: str, default=None):

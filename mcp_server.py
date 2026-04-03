@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 #!/usr/bin/env python3
 """
 AI Tracker System - MCP 桥接服务

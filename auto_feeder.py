@@ -4,11 +4,13 @@ AI Tracker System - 自动 RSS 巡航模块 (V4 历史全收录版)
 解除篇幅与短期时间限制，支持 2023 年 1 月 1 日以来的全量高价值情报应收尽收。
 """
 
+import fcntl
 import json
 import os
+import sys
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import deque
 import feedparser
 import requests
@@ -24,6 +26,7 @@ def log(*args, **kwargs):
 
 # 配置路径
 CONFIG_DIR = Path(__file__).parent / "config"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 FEEDS_FILE = CONFIG_DIR / "feeds.json"
 FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 HISTORY_FILE = CONFIG_DIR / "feeder_history.json"
@@ -179,21 +182,26 @@ def save_feed_metadata(metadata: dict):
 
 
 def is_newer_than_last_crawl(entry, last_crawl: str) -> bool:
-    """检查entry是否比上次抓取时间更新"""
+    """检查entry是否比上次抓取时间更新（统一使用UTC避免时区问题）"""
     if not last_crawl:
         return True  # 从未抓取过，放行全量
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
-        pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+        # feedparser 的 published_parsed 是 UTC 时间struct，转换为 UTC datetime
+        pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
+        # last_crawl 统一存储为 UTC 时间
         last_crawl_dt = datetime.fromisoformat(last_crawl)
+        # 如果 last_crawl 是 naive datetime（旧数据），视为 UTC 处理
+        if last_crawl_dt.tzinfo is None:
+            last_crawl_dt = last_crawl_dt.replace(tzinfo=timezone.utc)
         return pub_time > last_crawl_dt
     return True  # 无法判断时放行
 
 
 def is_after_2023(entry) -> bool:
-    """时间闸门：绝对放行 2023 年 1 月及之后的所有情报"""
+    """时间闸门：绝对放行 2023 年 1 月及之后的所有情报（UTC）"""
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
-        pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-        if pub_time < datetime(2023, 1, 1):
+        pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
+        if pub_time < datetime(2023, 1, 1, tzinfo=timezone.utc):
             return False
     return True
 
@@ -290,8 +298,6 @@ def run_auto_feeder():
             log(f"   🆕 首次抓取，全量模式")
 
         target_urls = parse_feed(feed_url, history, feed_metadata.get(feed_url))
-        # 更新该feed的抓取时间
-        new_metadata[feed_url] = datetime.now().isoformat()
 
         for url in target_urls:
             log(f"    -> 锁定目标: {url}")
@@ -299,6 +305,10 @@ def run_auto_feeder():
                 history.add(url)
                 total_pushed += 1
             time.sleep(0.5)  # 控制并发避免打挂后端
+
+        # 修复：在所有URL处理完成后再更新时间戳
+        # 避免解析耗时导致"未来"的文章被错误过滤
+        new_metadata[feed_url] = datetime.utcnow().isoformat()
 
     # 保存URL历史和元数据
     history.save()
@@ -310,4 +320,22 @@ def run_auto_feeder():
 
 
 if __name__ == "__main__":
-    run_auto_feeder()
+    # ── 并发防护：确保同一时刻只有一个实例运行 ──────────────────────
+    LOCK_FILE = Path(__file__).parent / ".auto_feeder.lock"
+    lock_fd = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"⚠️ 检测到 another auto_feeder instance is running, exiting.")
+        sys.exit(0)
+
+    try:
+        run_auto_feeder()
+    finally:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        lock_fd.close()
+        # 清理锁文件（可选）
+        try:
+            LOCK_FILE.unlink()
+        except OSError:
+            pass

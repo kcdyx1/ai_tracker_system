@@ -12,11 +12,9 @@ import sqlite3
 import json
 from datetime import datetime
 
-from database import update_task_status, save_extraction_result
+from database import DB_PATH, update_task_status, save_extraction_result
 from extractor import extract_with_validation
 from ingestion import fetch_clean_markdown
-
-DB_PATH = "/home/kangchen/.openclaw/workspace/ai_tracker_system/ai_tracker.db"
 
 celery_app = Celery(
     'ai_tracker',
@@ -44,6 +42,19 @@ celery_app.conf.update(
 def process_intel_task(self, task_id: int, url: str):
     """真正的异步解析大拿"""
     print(f"\n🚀 [V8 引擎] 开始处理高价值目标 #{task_id}: {url}")
+    # guard: skip if already processing/completed
+    from database import get_connection
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status FROM task_queue WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if row and row[0] in ("completed", "processing"):
+            print(f"  skip: task #{task_id} status={row[0]}")
+            return
+    finally:
+        conn.close()
+
     try:
         update_task_status(task_id, 'processing')
 
@@ -159,13 +170,30 @@ def deduplicate_entities():
                 WHERE target_id IN {in_clause}
             """, [primary_id] + in_params)
 
-            # 将事件关联到主实体
-            in_clause, in_params = _build_in_clause(duplicate_ids)
-            cursor.execute(f"""
-                UPDATE events
-                SET entity_id = ?
-                WHERE entity_id IN {in_clause}
-            """, [primary_id] + in_params)
+            # 将事件关联中的重复实体ID替换为主实体ID
+            # events 使用 involved_entities_json (JSON数组)，需要逐条处理
+            cursor.execute("SELECT id, involved_entities_json FROM events")
+            for event_row in cursor.fetchall():
+                event_id, involved_json = event_row
+                if not involved_json or involved_json in ('null', ''):
+                    continue
+                try:
+                    entity_ids = json.loads(involved_json)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    continue
+                updated = False
+                new_ids = []
+                for eid in entity_ids:
+                    if eid in duplicate_ids:
+                        new_ids.append(primary_id)
+                        updated = True
+                    else:
+                        new_ids.append(eid)
+                if updated:
+                    cursor.execute(
+                        "UPDATE events SET involved_entities_json = ? WHERE id = ?",
+                        (json.dumps(new_ids, ensure_ascii=False), event_id)
+                    )
 
             # 删除重复实体
             in_clause, in_params = _build_in_clause(duplicate_ids)

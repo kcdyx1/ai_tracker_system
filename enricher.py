@@ -23,9 +23,9 @@ _client_local = threading.local()
 def _get_client() -> Anthropic:
     """线程安全的客户端获取（每个线程独立实例）"""
     if not hasattr(_client_local, 'client') or _client_local.client is None:
-        api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        api_key = os.environ.get("MINIMAX_API_KEY")
         if not api_key:
-            raise ValueError("未配置 MINIMAX_API_KEY 或 ANTHROPIC_API_KEY")
+            raise ValueError("请配置 MINIMAX_API_KEY 环境变量")
         _client_local.client = Anthropic(
             api_key=api_key,
             base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/anthropic"),

@@ -6,6 +6,7 @@ AI 提取引擎 (AI Extraction Engine)
 """
 
 import os
+import threading
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -43,12 +44,12 @@ DEFAULT_API_COOLDOWN = float(os.environ.get("EXTRACTOR_API_COOLDOWN", "1.0"))  #
 MAX_API_COOLDOWN = float(os.environ.get("EXTRACTOR_MAX_COOLDOWN", "5.0"))      # 最大冷却时间
 
 
-# ── 单例模式 ────────────────────────────────────────────────────────────────
-_extractor_client = None
+# ── 线程安全的客户端工厂 ────────────────────────────────────────────────────
+_client_local = threading.local()
 
 def _get_extractor():
-    global _extractor_client
-    if _extractor_client is None:
+    """线程安全的客户端获取（每个线程独立实例）"""
+    if not hasattr(_client_local, 'client') or _client_local.client is None:
         api_key = os.environ.get("MINIMAX_API_KEY")
         if not api_key:
             raise ValueError("请设置环境变量 MINIMAX_API_KEY")
@@ -56,8 +57,8 @@ def _get_extractor():
             api_key=api_key,
             base_url="https://api.minimax.chat/anthropic"
         )
-        _extractor_client = instructor.from_anthropic(client)
-    return _extractor_client
+        _client_local.client = instructor.from_anthropic(client)
+    return _client_local.client
 
 def create_extractor():
     """兼容旧调用，保持接口不变"""
@@ -132,7 +133,7 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
     """
     提取质量门禁：过滤低质量、无关、日期异常的事件
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     # AI/科技相关关键词（用于过滤无关内容）
     ai_keywords = [
@@ -145,22 +146,26 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
         "acquisition", "merger", "ipo", "public", "launch", "release"
     ]
 
-    # 日期边界
-    min_date = datetime(2020, 1, 1)
-    max_date = datetime.now() + timedelta(days=7)
+    # 日期边界（统一使用 UTC，避免时区比较错误）
+    min_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    max_date = datetime.now(timezone.utc) + timedelta(days=7)
 
     valid_events = []
     for event in result.events:
-        # 1. 日期校验
+        # 1. 日期校验（统一为 UTC 比较）
         event_date = None
         try:
             event_date = event.date
             if hasattr(event_date, 'year'):
-                if event_date < min_date or event_date > max_date:
-                    print(f"⚠️ 过滤异常日期事件: {event.title[:30]}... (日期: {event_date.year})")
+                # 标准化为 UTC 时区再比较
+                ed = event_date
+                if ed.tzinfo is None:
+                    ed = ed.replace(tzinfo=timezone.utc)
+                if ed < min_date or ed > max_date:
+                    print(f"过滤异常日期事件: {event.title[:30]}... (日期: {ed.year})")
                     continue
         except (ValueError, TypeError, AttributeError) as e:
-            print(f"⚠️ 过滤日期解析失败的事件: {event.title[:30]}... 错误: {e}")
+            print(f"过滤日期解析失败的事件: {event.title[:30]}... 错误: {e}")
             continue
 
         # 2. 相关性校验 - 检查标题和摘要是否包含AI相关关键词

@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 # 配置路径
 CONFIG_DIR = Path(__file__).parent / "config"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 FEEDS_UNIFIED_FILE = CONFIG_DIR / "feeds_unified.json"
 HISTORY_FILE = CONFIG_DIR / "collector_history.json"

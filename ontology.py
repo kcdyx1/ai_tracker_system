@@ -65,13 +65,13 @@ class Entity(BaseNode):
     description: str = Field(default="")
 
 class Company(Entity):
-    entity_type: Literal["company"] = Field(default="company")
+    entity_type: Literal["company"] = "company"
     founded_year: Optional[int] = Field(default=None)
     website: Optional[str] = Field(default=None)
     status: CompanyStatus = Field(default=CompanyStatus.ACTIVE)
 
 class Product(Entity):
-    entity_type: Literal["product"] = Field(default="product")
+    entity_type: Literal["product"] = "product"
     product_type: ProductType = Field(...)
     company_id: Optional[str] = Field(default=None)
     is_open_source: Optional[bool] = Field(default=None)
@@ -88,11 +88,11 @@ class Product(Entity):
     github_url: Optional[str] = Field(default=None)
 
 class Person(Entity):
-    entity_type: Literal["person"] = Field(default="person")
+    entity_type: Literal["person"] = "person"
     current_title: Optional[str] = Field(default=None)
 
 class TechConcept(Entity):
-    entity_type: Literal["tech_concept"] = Field(default="tech_concept")
+    entity_type: Literal["tech_concept"] = "tech_concept"
     category: TechCategory = Field(...)
 
 EntityUnion = Union[Company, Product, Person, TechConcept]

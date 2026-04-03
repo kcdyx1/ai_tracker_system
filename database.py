@@ -43,12 +43,14 @@ def init_db() -> None:
         for col in ["published_date", "attributes_json", "risk_level", "sentiment"]:
             try:
                 cursor.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass  # 列已存在
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise  # 非"列已存在"错误，继续抛出
         try:
             cursor.execute("ALTER TABLE entities ADD COLUMN attributes_json TEXT")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS relationships (
@@ -61,8 +63,9 @@ def init_db() -> None:
         """)
         try:
             cursor.execute("ALTER TABLE relationships ADD COLUMN evidence TEXT")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_queue (
@@ -72,8 +75,9 @@ def init_db() -> None:
         """)
         try:
             cursor.execute("ALTER TABLE task_queue ADD COLUMN error_message TEXT")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
 
         conn.commit()
 
@@ -86,8 +90,9 @@ def init_db() -> None:
         ]:
             try:
                 cursor.execute(sql)
-            except sqlite3.OperationalError:
-                pass  # 索引已存在
+            except sqlite3.OperationalError as e:
+                if "already exists" not in str(e).lower():
+                    raise
         conn.commit()
 
         print(f"✅ 数据库底座就绪: {DB_PATH}")
@@ -148,8 +153,6 @@ def normalize_for_match(text: str) -> str:
 
 def find_entity_by_alias(name: str, entity_type: str, name_type_to_id: dict, all_aliases: dict) -> str:
     """通过名称或别名查找已有实体的规范ID"""
-    import re
-
     # 1. 直接检查 (name, type)
     if (name, entity_type) in name_type_to_id:
         return name_type_to_id[(name, entity_type)]
@@ -161,9 +164,9 @@ def find_entity_by_alias(name: str, entity_type: str, name_type_to_id: dict, all
             if (canonical, entity_type) in name_type_to_id:
                 return name_type_to_id[(canonical, entity_type)]
 
-    # 3. 检查所有实体的别名列表
-    name_lower = name.lower()
-    for existing_name, existing_type, existing_id in all_aliases:
+    # 3. 检查 name_type_to_id 中所有实体的名称和别名列表
+    # name_type_to_id: {(name, type): id}
+    for (existing_name, existing_type), existing_id in name_type_to_id.items():
         if existing_type != entity_type:
             continue
         if normalize_for_match(existing_name) == normalized:
@@ -323,16 +326,25 @@ def get_pending_task() -> dict | None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        # 两步原子操作：先查后改，兼容 SQLite 3.35 以前版本
         cursor.execute("""
-            UPDATE task_queue SET status = 'processing'
-            WHERE id = (SELECT id FROM task_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1)
-            RETURNING id, url
+            SELECT id, url FROM task_queue
+            WHERE status = 'pending'
+            ORDER BY created_at ASC LIMIT 1
         """)
         row = cursor.fetchone()
+        if not row:
+            return None
+        task_id, url = row['id'], row['url']
+        cursor.execute(
+            "UPDATE task_queue SET status = 'processing' WHERE id = ? AND status = 'pending'",
+            (task_id,)
+        )
         conn.commit()
-        if row:
-            return {"id": row['id'], "url": row['url']}
-        return None
+        if cursor.rowcount == 0:
+            # 已被其他 worker 抢走，跳过
+            return None
+        return {"id": task_id, "url": url}
     except Exception as e:
         print(f"❌ get_pending_task 报错: {e}")
         return None
