@@ -8,6 +8,7 @@ import os
 import json
 import re
 import requests
+import threading
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from database import get_connection, query_entity_by_id
@@ -16,21 +17,21 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
-# ── 单例客户端（模块初始化时创建，整个进程生命周期复用）───────────────────────
-_client = None
+# ── 线程安全的客户端工厂 ────────────────────────────────────────────────────
+_client_local = threading.local()
 
 def _get_client() -> Anthropic:
-    global _client
-    if _client is None:
+    """线程安全的客户端获取（每个线程独立实例）"""
+    if not hasattr(_client_local, 'client') or _client_local.client is None:
         api_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("未配置 MINIMAX_API_KEY 或 ANTHROPIC_API_KEY")
-        _client = Anthropic(
+        _client_local.client = Anthropic(
             api_key=api_key,
             base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/anthropic"),
             timeout=60.0,
         )
-    return _client
+    return _client_local.client
 
 def search_tavily(query: str) -> str:
     api_key = os.environ.get("TAVILY_API_KEY")
@@ -46,7 +47,7 @@ def search_tavily(query: str) -> str:
 
 def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -> dict:
     client = _get_client()
-    
+
     # 💡 核心升级：根据类型动态定制要提取的 JSON 字段！
     if entity_type == 'company':
         json_schema = """{ "description": "详细简介（核心业务与行业地位）", "website": "官网", "founded_year": "成立年份", "founders": "创始人", "core_business": "核心业务/投资偏好", "latest_funding": "最新融资信息" }"""
@@ -65,12 +66,12 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
 {json_schema}"""
 
     print(f"  🧠 正在让 MiniMax 提炼【{entity_type}】专属结构化 JSON...")
-    
+
     msg = client.messages.create(
         model="MiniMax-M2.5", max_tokens=2000, system=sys_prompt,
         messages=[{"role": "user", "content": f"搜索结果如下：\n\n{search_context}"}]
     )
-    
+
     raw_text = ""
     for block in msg.content:
         block_type = getattr(block, "type", "")
@@ -80,10 +81,11 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
         elif block_type == "text":
             raw_text += getattr(block, "text", "")
             raw_text += block.text
-            
+
     match = re.search(r'\{[\s\S]*\}', raw_text)
-    if match: raw_text = match.group(0)
-        
+    if match:
+        raw_text = match.group(0)
+
     try:
         try:
             dump = json.loads(raw_text)
@@ -93,8 +95,9 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
         return {"description": None, "attributes": {}}
 
     desc = dump.pop("description", None)
-    if desc and "未提及" in desc: desc = ""
-    
+    if desc and "未提及" in desc:
+        desc = ""
+
     # 💡 增强过滤逻辑：只要包含这些词，就视为无效数据
     invalid_keywords = ["none", "null", "未提及", "未知", "暂无", "不适用", "n/a", "无"]
     attrs = {}
@@ -102,41 +105,49 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
         v_str = str(v).strip().lower()
         if v_str and not any(kw in v_str for kw in invalid_keywords):
             attrs[k] = v
-            
+
     return {"description": desc, "attributes": attrs}
 
 def run_enrichment(entity_id: str) -> dict:
     entity = query_entity_by_id(entity_id)
-    if not entity: return {"status": "error", "message": "实体不存在"}
-    
+    if not entity:
+        return {"status": "error", "message": "实体不存在"}
+
     name, e_type = entity['name'], entity['type']
     print(f"\n🕵️‍♂️ 侦察兵出动：锁定目标 [{name}] (类型: {e_type})")
-    
-    if e_type == 'company': query = f"{name} 投资机构 公司简介 创始人 投资偏好 融资"
-    elif e_type == 'person': query = f"{name} AI 履历 职务 核心成就"
-    else: query = f"{name} AI model context window open source architecture"
-    
+
+    if e_type == 'company':
+        query = f"{name} 投资机构 公司简介 创始人 投资偏好 融资"
+    elif e_type == 'person':
+        query = f"{name} AI 履历 职务 核心成就"
+    else:
+        query = f"{name} AI model context window open source architecture"
+
     try:
         print(f"  🌐 正在调用 Tavily 扫描全网...")
         search_context = search_tavily(query)
-        if not search_context.strip(): return {"status": "error", "message": "未搜索到情报"}
-            
+        if not search_context.strip():
+            return {"status": "error", "message": "未搜索到情报"}
+
         fused_data = fuse_intelligence(name, e_type, search_context)
-        
-        conn = get_connection(); cursor = conn.cursor()
+
+        conn = get_connection()
+        cursor = conn.cursor()
         old_attr_str = entity.get('attributes_json')
         try:
             current_attrs = json.loads(old_attr_str) if old_attr_str and old_attr_str != "null" else {}
         except json.JSONDecodeError:
             current_attrs = {}
-        
-        if fused_data['attributes']: current_attrs.update(fused_data['attributes'])
+
+        if fused_data['attributes']:
+            current_attrs.update(fused_data['attributes'])
         new_desc = fused_data['description'] or entity.get('description', '')
-        
-        cursor.execute("UPDATE entities SET description = ?, attributes_json = ? WHERE id = ?", 
+
+        cursor.execute("UPDATE entities SET description = ?, attributes_json = ? WHERE id = ?",
                        (new_desc, json.dumps(current_attrs, ensure_ascii=False), entity_id))
-        conn.commit(); conn.close()
-        
+        conn.commit()
+        conn.close()
+
         print(f"  ✅ 侦察成功！最终写入的扩展参数量: {len(fused_data['attributes'])}")
         return {"status": "success", "message": "成功挖掘并补全情报"}
     except Exception as e:

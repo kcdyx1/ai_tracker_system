@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap } from 'lucide-react'
+import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, BookOpen, Star, GitFork, ExternalLink, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap } from 'lucide-react'
 import axios from 'axios'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
@@ -13,6 +13,8 @@ interface Task { id: number; url: string; status: string; error_message: string;
 interface EventItem { id: string; title: string; date: string; summary: string; risk_level: string | null; sentiment: string | null; source_url: string | null; }
 interface EntityItem { id: string; type: string; name: string; description: string; attributes_json: string; created_at: string; }
 interface ChatMessage { role: 'user' | 'assistant'; content: string; }
+interface PaperItem { id: string; title: string; abstract: string; authors: string; published_date: string; arxiv_id: string; pdf_url: string; categories: string; citation_count: number; doi: string; source_url: string; }
+interface RepositoryItem { id: string; name: string; full_name: string; description: string; stars: number; forks: number; language: string; topics: string; owner: string; html_url: string; trending_date: string; }
 
 // ============================================================================
 // 组件 1: 🎛️ 指挥中心 (Ops Center) - 带多模态情报接收舱版
@@ -946,12 +948,226 @@ const CopilotChat = () => {
   )
 }
 
+// ============================================================================
+// 组件: 📚 学术论文库 (Papers Dashboard)
+// ============================================================================
+const PapersDashboard = () => {
+  const [papers, setPapers] = useState<PaperItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState<{total: number, unique_arxiv: number} | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+
+  const fetchPapers = async () => {
+    try {
+      const [papersRes, statsRes] = await Promise.all([
+        axios.get('/api/papers'),
+        axios.get('/api/papers/stats')
+      ])
+      setPapers(papersRes.data)
+      setStats(statsRes.data)
+    } catch (error) {
+      console.error('Failed to fetch papers:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchPapers() }, [])
+
+  const filteredPapers = papers.filter(p =>
+    p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (p.abstract && p.abstract.toLowerCase().includes(searchTerm.toLowerCase()))
+  )
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-400 flex items-center">
+            <BookOpen className="w-8 h-8 mr-3 text-cyan-400" />学术论文库
+          </h1>
+          <p className="text-slate-400 mt-2">arXiv 学术论文与预印本</p>
+        </div>
+        {stats && (
+          <div className="flex gap-4">
+            <div className="bg-slate-900/40 border border-slate-700/50 rounded-xl px-4 py-2">
+              <span className="text-xs text-slate-400">论文总数</span>
+              <p className="text-xl font-bold text-cyan-400">{stats.total}</p>
+            </div>
+            <div className="bg-slate-900/40 border border-slate-700/50 rounded-xl px-4 py-2">
+              <span className="text-xs text-slate-400">arXiv 论文</span>
+              <p className="text-xl font-bold text-blue-400">{stats.unique_arxiv}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="搜索论文标题或摘要..."
+          className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all"
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {filteredPapers.slice(0, 50).map((paper) => (
+            <div key={paper.id} className="bg-slate-900/40 border border-slate-700/50 rounded-xl p-5 hover:border-cyan-500/30 transition-colors">
+              <div className="flex justify-between items-start">
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-slate-100 mb-2 line-clamp-2">{paper.title}</h3>
+                  <p className="text-sm text-slate-400 mb-3 line-clamp-2">{paper.abstract}</p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                    <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" />{paper.published_date ? paper.published_date.split('T')[0] : 'N/A'}</span>
+                    <span className="flex items-center"><FileText className="w-3 h-3 mr-1" />{paper.citation_count} citations</span>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2 ml-4">
+                  {paper.pdf_url && (
+                    <a href={paper.pdf_url} target="_blank" rel="noopener noreferrer"
+                       className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg hover:bg-cyan-500/20 transition-colors">
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                  <span className="text-xs text-slate-500 font-mono">{paper.arxiv_id}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+          {filteredPapers.length === 0 && (
+            <div className="text-center py-12 text-slate-500">
+              <BookOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>没有找到匹配的论文</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// 组件: 🐙 开源项目库 (Repositories Dashboard)
+// ============================================================================
+const RepositoriesDashboard = () => {
+  const [repos, setRepos] = useState<RepositoryItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState<{total: number} | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+
+  const fetchRepos = async () => {
+    try {
+      const [reposRes, statsRes] = await Promise.all([
+        axios.get('/api/repositories'),
+        axios.get('/api/repositories/stats')
+      ])
+      setRepos(reposRes.data)
+      setStats(statsRes.data)
+    } catch (error) {
+      console.error('Failed to fetch repositories:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchRepos() }, [])
+
+  const filteredRepos = repos.filter(r =>
+    r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (r.full_name && r.full_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+    (r.description && r.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
+    (r.language && r.language.toLowerCase().includes(searchTerm.toLowerCase()))
+  )
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-red-400 flex items-center">
+            <Star className="w-8 h-8 mr-3 text-orange-400" />开源项目库
+          </h1>
+          <p className="text-slate-400 mt-2">GitHub Trending 项目与仓库</p>
+        </div>
+        {stats && (
+          <div className="bg-slate-900/40 border border-slate-700/50 rounded-xl px-4 py-2">
+            <span className="text-xs text-slate-400">仓库总数</span>
+            <p className="text-xl font-bold text-orange-400">{stats.total}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="搜索项目名称、描述或语言..."
+          className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/50 transition-all"
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 text-orange-400 animate-spin" />
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {filteredRepos.slice(0, 50).map((repo) => (
+            <div key={repo.id} className="bg-slate-900/40 border border-slate-700/50 rounded-xl p-5 hover:border-orange-500/30 transition-colors">
+              <div className="flex justify-between items-start">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="text-lg font-semibold text-slate-100">{repo.name}</h3>
+                    <a href={repo.html_url} target="_blank" rel="noopener noreferrer"
+                       className="text-orange-400 hover:text-orange-300">
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </div>
+                  <p className="text-sm text-slate-400 mb-3 line-clamp-2">{repo.description || 'No description'}</p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                    {repo.language && (
+                      <span className="flex items-center px-2 py-1 bg-slate-800 rounded text-orange-400">
+                        {repo.language}
+                      </span>
+                    )}
+                    <span className="flex items-center"><Star className="w-3 h-3 mr-1 text-orange-400" />{repo.stars.toLocaleString()}</span>
+                    <span className="flex items-center"><GitFork className="w-3 h-3 mr-1" />{repo.forks.toLocaleString()}</span>
+                    <span className="flex items-center"><UserIcon className="w-3 h-3 mr-1" />{repo.owner}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+          {filteredRepos.length === 0 && (
+            <div className="text-center py-12 text-slate-500">
+              <Star className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>没有找到匹配的项目</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 function App() {
   const [activeTab, setActiveTab] = useState('ops') // 回到指挥中心默认页
 
   const navItems = [
     { id: 'ops', label: '指挥中心', icon: <Activity className="w-5 h-5" /> },
     { id: 'db', label: '情报大盘', icon: <Database className="w-5 h-5" /> },
+    { id: 'papers', label: '学术论文', icon: <BookOpen className="w-5 h-5" /> },
+    { id: 'repos', label: '开源项目', icon: <Star className="w-5 h-5" /> },
     { id: 'graph', label: '战术图谱', icon: <Network className="w-5 h-5" /> },
     { id: 'chat', label: '参谋部', icon: <MessageSquare className="w-5 h-5" /> },
   ]
@@ -979,6 +1195,8 @@ function App() {
       <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
         {activeTab === 'ops' && <OpsCenter />}
         {activeTab === 'db' && <IntelligenceDashboard />}
+        {activeTab === 'papers' && <PapersDashboard />}
+        {activeTab === 'repos' && <RepositoriesDashboard />}
         {activeTab === 'graph' && <TacticalGraph />}
         {activeTab === 'chat' && <CopilotChat />}
       </main>

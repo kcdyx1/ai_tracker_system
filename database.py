@@ -41,11 +41,15 @@ def init_db() -> None:
         """)
         # 智能对齐旧数据库的列结构
         for col in ["published_date", "attributes_json", "risk_level", "sentiment"]:
-            try: cursor.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
-            except: pass
-        try: cursor.execute("ALTER TABLE entities ADD COLUMN attributes_json TEXT")
-        except: pass
-        
+            try:
+                cursor.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+        try:
+            cursor.execute("ALTER TABLE entities ADD COLUMN attributes_json TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS relationships (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,8 +59,10 @@ def init_db() -> None:
                 UNIQUE(source_id, target_id, relation_type)
             )
         """)
-        try: cursor.execute("ALTER TABLE relationships ADD COLUMN evidence TEXT")
-        except: pass
+        try:
+            cursor.execute("ALTER TABLE relationships ADD COLUMN evidence TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_queue (
@@ -64,11 +70,13 @@ def init_db() -> None:
                 status TEXT DEFAULT 'pending', error_message TEXT, created_at TEXT NOT NULL
             )
         """)
-        try: cursor.execute("ALTER TABLE task_queue ADD COLUMN error_message TEXT")
-        except: pass
-        
+        try:
+            cursor.execute("ALTER TABLE task_queue ADD COLUMN error_message TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
         conn.commit()
-        
+
         # 确保性能索引存在
         for sql in [
             "CREATE INDEX IF NOT EXISTS idx_events_entities ON events(involved_entities_json)",
@@ -76,48 +84,17 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_task_status ON task_queue(status)",
             "CREATE INDEX IF NOT EXISTS idx_events_published ON events(published_date)",
         ]:
-            try: cursor.execute(sql)
-            except: pass
+            try:
+                cursor.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # 索引已存在
         conn.commit()
-        
+
         print(f"✅ 数据库底座就绪: {DB_PATH}")
 
-        # FTS5 全文索引初始化（幂等，可重复调用）
-        try:
-            import sqlite3 as _sqlite3
-            _conn = _sqlite3.connect(str(DB_PATH))
-            _cur = _conn.cursor()
-            _cur.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
-                    entity_id UNINDEXED, content,
-                    tokenize='unicode61 remove_diacritics 2'
-                )
-            """)
-            _cur.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-                    event_id UNINDEXED, title, summary,
-                    tokenize='unicode61 remove_diacritics 2'
-                )
-            """)
-            # 增量同步
-            _cur.execute("""
-                INSERT INTO entities_fts(entity_id, content)
-                SELECT id, COALESCE(name, '') || ' ' || COALESCE(aliases_json, '') || ' ' ||
-                       COALESCE(description, '') || ' ' || COALESCE(attributes_json, '')
-                FROM entities e
-                WHERE NOT EXISTS (SELECT 1 FROM entities_fts f WHERE f.entity_id = e.id)
-            """)
-            _cur.execute("""
-                INSERT INTO events_fts(event_id, title, summary)
-                SELECT id, COALESCE(title, ''), COALESCE(summary, '')
-                FROM events e
-                WHERE NOT EXISTS (SELECT 1 FROM events_fts f WHERE f.event_id = e.id)
-            """)
-            _conn.commit()
-            _conn.close()
-            print("✅ FTS5 全文索引已就绪")
-        except Exception as e:
-            print(f"⚠️ FTS5 初始化失败（不影响主流程）: {e}")
+        # 统一由 ensure_fts_tables() 处理 FTS5 初始化
+        ensure_fts_tables()
+
     finally:
         conn.close()
 
@@ -203,21 +180,21 @@ def save_extraction_result(result: ExtractionResult) -> None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        
+
         # ── 预防重复：建立 (name, type) → 已有ID 的映射 ─────────────────────
         # 新实体如果同名同类，直接复用已有ID，避免产生副本
         cursor.execute("SELECT name, type, id FROM entities")
         name_type_to_id = {(row[0], row[1]): row[2] for row in cursor.fetchall()}
-        
-        # 新 ID 映射：生成的 ID → 规范 ID（可能是自己，也可能是已有ID）
+
+        # 新 ID 映射：生成的 ID → 规范ID（可能是自己，也可能是已有ID）
         id_mapping = {}  # new_id → canonical_id
-        
+
         for entity in result.entities:
             entity_type = entity.entity_type.value if hasattr(entity.entity_type, 'value') else str(entity.entity_type)
             entity_dict = entity.model_dump()
             base_keys = {'id', 'entity_type', 'name', 'aliases', 'description', 'created_at'}
             attributes = {k: v for k, v in entity_dict.items() if k not in base_keys and v is not None and v != []}
-            
+
             # 关键：同名同类实体复用已有ID，从根源上防止重复
             # 增强版：也检查别名和跨语言映射
             all_aliases = {}  # 已有的别名映射 {id: [aliases]}
@@ -225,7 +202,7 @@ def save_extraction_result(result: ExtractionResult) -> None:
                 if row[1] and row[1] not in ('null', ''):
                     try:
                         all_aliases[row[0]] = json.loads(row[1])
-                    except:
+                    except json.JSONDecodeError:
                         all_aliases[row[0]] = []
 
             canonical_id = find_entity_by_alias(entity.name, entity_type, name_type_to_id, all_aliases)
@@ -256,15 +233,15 @@ def save_extraction_result(result: ExtractionResult) -> None:
                 entity_desc = entity.description
                 # 记录新产生的 ID
                 name_type_to_id[(entity.name, entity_type)] = use_id
-            
+
             id_mapping[entity.id] = use_id
-            
+
             cursor.execute("""
                 INSERT OR REPLACE INTO entities (id, type, name, aliases_json, description, created_at, attributes_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (use_id, entity_type, entity.name, json.dumps(entity.aliases), entity_desc, 
+            """, (use_id, entity_type, entity.name, json.dumps(entity.aliases), entity_desc,
                   entity.created_at.isoformat() if isinstance(entity.created_at, datetime) else str(entity.created_at), json.dumps(attributes, ensure_ascii=False)))
-        
+
         # ── 写入 events：把实体ID映射到规范ID ──────────────────────────────
         for event in result.events:
             canonical_ids = [id_mapping.get(eid, eid) for eid in event.involved_entity_ids]
@@ -276,7 +253,7 @@ def save_extraction_result(result: ExtractionResult) -> None:
                   json.dumps(canonical_ids), event.summary, event.source_url,
                   event.created_at.isoformat() if isinstance(event.created_at, datetime) else str(event.created_at),
                   getattr(event, 'risk_level', None), getattr(event, 'sentiment', None)))
-        
+
         # ── 写入 relationships：把实体ID映射到规范ID ───────────────────────
         for rel in result.relationships:
             src = id_mapping.get(rel.source_id, rel.source_id)
@@ -299,7 +276,8 @@ def query_all_entities() -> list:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM entities")
         return [dict(r) for r in cursor.fetchall()]
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def query_entity_by_id(entity_id: str) -> Optional[dict]:
     conn = get_connection()
@@ -308,7 +286,8 @@ def query_entity_by_id(entity_id: str) -> Optional[dict]:
         cursor.execute("SELECT * FROM entities WHERE id = ?", (entity_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def get_recent_events(days: int = 7) -> list:
     from datetime import timedelta
@@ -318,7 +297,8 @@ def get_recent_events(days: int = 7) -> list:
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
         cursor.execute("SELECT * FROM events WHERE published_date >= ? ORDER BY published_date DESC", (cutoff_date,))
         return [dict(r) for r in cursor.fetchall()]
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def push_task(url: str) -> bool:
     conn = get_connection()
@@ -328,31 +308,36 @@ def push_task(url: str) -> bool:
         row = cursor.fetchone()
         if row is None:
             cursor.execute("INSERT INTO task_queue (url, status, created_at) VALUES (?, 'pending', ?)", (url, datetime.now().isoformat()))
-            conn.commit(); return True
+            conn.commit()
+            return True
         else:
             if row[0] in ('failed', 'completed'):
                 cursor.execute("UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = ? WHERE url = ?", (datetime.now().isoformat(), url))
-                conn.commit(); return True
+                conn.commit()
+                return True
             return False
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def get_pending_task() -> dict | None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE task_queue SET status = 'processing' 
+            UPDATE task_queue SET status = 'processing'
             WHERE id = (SELECT id FROM task_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1)
             RETURNING id, url
         """)
         row = cursor.fetchone()
         conn.commit()
-        if row: return {"id": row['id'], "url": row['url']}
+        if row:
+            return {"id": row['id'], "url": row['url']}
         return None
     except Exception as e:
         print(f"❌ get_pending_task 报错: {e}")
         return None
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def update_task_status(task_id: int, status: str, error_msg: str = None) -> None:
     conn = get_connection()
@@ -360,12 +345,14 @@ def update_task_status(task_id: int, status: str, error_msg: str = None) -> None
         cursor = conn.cursor()
         cursor.execute("UPDATE task_queue SET status = ?, error_message = ? WHERE id = ?", (status, error_msg, task_id))
         conn.commit()
-    finally: conn.close()
+    finally:
+        conn.close()
 
 def ensure_fts_tables() -> None:
     """
     初始化并维护 FTS5 虚拟表，用于全文检索（BM25 排序）。
     每次调用会增量同步新数据，不重复全量重建。
+    统一由本函数处理 FTS5 相关操作，避免重复初始化。
     """
     conn = get_connection()
     try:
@@ -417,7 +404,6 @@ def ensure_fts_tables() -> None:
         """)
         conn.commit()
 
-        # ── 重建函数（可随时调用）────────────────────────────────────────────
         print("✅ FTS5 全文索引已同步")
     finally:
         conn.close()
@@ -452,7 +438,8 @@ def get_events_for_entity(entity_id: str) -> list:
             ORDER BY e.date DESC
         """, (entity_id,))
         return [dict(r) for r in cursor.fetchall()]
-    finally: conn.close()
+    finally:
+        conn.close()
 
 
 def _search_entities_fts(query: str, top_k: int = 10) -> list[tuple[str, float]]:

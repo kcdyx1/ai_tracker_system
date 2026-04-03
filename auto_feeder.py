@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 import feedparser
 import requests
 import builtins
@@ -26,19 +27,24 @@ CONFIG_DIR = Path(__file__).parent / "config"
 FEEDS_FILE = CONFIG_DIR / "feeds.json"
 FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 HISTORY_FILE = CONFIG_DIR / "feeder_history.json"
-API_URL = "http://127.0.0.1:8000/api/ingest"
+
+# API URL 可配置，优先使用环境变量
+API_URL = os.environ.get("API_INGEST_URL", "http://127.0.0.1:8000/api/ingest")
+
+# 历史记录最大容量（防止内存膨胀）
+MAX_HISTORY_SIZE = int(os.environ.get("FEEDER_HISTORY_MAX_SIZE", "100000"))
 
 # 高价值情报过滤网 (维持强力配置)
 AI_KEYWORDS = [
-    "llm", "大模型", "vlm", "多模态", "moe", "混合专家", "slm", "端侧模型", 
+    "llm", "大模型", "vlm", "多模态", "moe", "混合专家", "slm", "端侧模型",
     "transformer", "diffusion", "dit", "agi", "aigc", "大语言模型", "具身智能",
-    "openai", "chatgpt", "sora", "gpt-4", "o1", "o3", "anthropic", "claude", 
+    "openai", "chatgpt", "sora", "gpt-4", "o1", "o3", "anthropic", "claude",
     "google", "gemini", "gemma", "meta", "llama", "deepseek", "深度求索",
-    "moonshot", "kimi", "月之暗面", "minimax", "稀宇科技", "zhipu", "智谱", 
+    "moonshot", "kimi", "月之暗面", "minimax", "稀宇科技", "zhipu", "智谱",
     "qwen", "通义千问", "baichuan", "百川", "mistral", "xai", "grok", "midjourney", "perplexity",
     "data", "数据", "rag", "graphrag", "检索增强", "知识图谱", "knowledge graph",
     "neo4j", "图数据库", "chroma", "milvus", "qdrant", "向量数据库", "vector database",
-    "synthetic data", "合成数据", "数据治理", "数据资产", "数据估值", "unstructured data", 
+    "synthetic data", "合成数据", "数据治理", "数据资产", "数据估值", "unstructured data",
     "非结构化数据", "数据清洗", "etl", "data pipeline",
     "agent", "智能体", "multi-agent", "多智能体", "ai-native", "ai原生",
     "langchain", "llamaindex", "autogen", "crewai", "dify", "coze", "openclaw",
@@ -46,7 +52,7 @@ AI_KEYWORDS = [
     "gpu", "tpu", "npu", "nvidia", "英伟达", "h100", "b200", "gb200", "cuda", "tensorrt", "groq",
     "算力", "数据中心", "液冷", "边缘计算", "edge computing",
     "open source", "开源", "huggingface", "github", "local deployment", "本地部署", "算力集群",
-    "parameters", "参数量", "context window", "上下文", 
+    "parameters", "参数量", "context window", "上下文",
     "fine-tuning", "微调", "rlhf", "dpo", "lora", "量化", "quantization", "prompt", "提示词", "数据集", "数据"
 ]
 
@@ -56,6 +62,50 @@ WHITELIST_DOMAINS = [
     "databricks.com", "snowflake.com", "zilliz.com", "qdrant.tech", "weaviate.io",
     "langchain.dev", "llamaindex.ai", "buttondown.email/ainews", "importai.substack.com"
 ]
+
+
+class HistoryManager:
+    """内存高效的历史记录管理器，使用 deque 限制内存使用"""
+
+    def __init__(self, filepath: Path, max_size: int = MAX_HISTORY_SIZE):
+        self.filepath = filepath
+        self.max_size = max_size
+        # 使用 deque 自动丢弃旧条目，控制内存使用
+        self._history = deque(maxlen=max_size)
+        self._load()
+
+    def _load(self):
+        """加载历史记录"""
+        if self.filepath.exists():
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    # 重建 deque（会自动截断超出的部分）
+                    self._history = deque(data, maxlen=self.max_size)
+            except (json.JSONDecodeError, IOError) as e:
+                log(f"⚠️ 历史记录加载失败: {e}，将创建新的历史记录")
+                self._history = deque(maxlen=self.max_size)
+
+    def save(self):
+        """保存历史记录到磁盘"""
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(list(self._history), f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            log(f"⚠️ 历史记录保存失败: {e}")
+
+    def add(self, url: str):
+        """添加 URL 到历史记录"""
+        if url not in self._history:
+            self._history.append(url)
+
+    def __contains__(self, url: str) -> bool:
+        """O(1) 查找"""
+        return url in self._history
+
+    def __len__(self) -> int:
+        return len(self._history)
+
 
 def load_feeds():
     """加载feed配置，支持feeds_v2.json的分层结构"""
@@ -89,33 +139,44 @@ def load_feeds():
                 if feeds:
                     log(f"  ✅ 从feeds.json加载了 {len(feeds)} 个源")
                     return feeds
-            except:
+            except Exception:
                 pass
     return []
 
+
 def load_json_file(filepath: Path, default_val: list) -> list:
-    if not filepath.exists(): return default_val
+    if not filepath.exists():
+        return default_val
     with open(filepath, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except: return default_val
+        try:
+            return json.load(f)
+        except Exception:
+            return default_val
+
 
 def save_json_file(filepath: Path, data: list):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
 def load_feed_metadata() -> dict:
     """加载每个feed的最后抓取时间"""
     metadata_file = HISTORY_FILE.with_name("feeder_metadata.json")
-    if not metadata_file.exists(): return {}
+    if not metadata_file.exists():
+        return {}
     with open(metadata_file, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except: return {}
+        try:
+            return json.load(f)
+        except Exception:
+            return {}
+
 
 def save_feed_metadata(metadata: dict):
     """保存每个feed的最后抓取时间"""
     metadata_file = HISTORY_FILE.with_name("feeder_metadata.json")
     with open(metadata_file, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
+
 
 def is_newer_than_last_crawl(entry, last_crawl: str) -> bool:
     """检查entry是否比上次抓取时间更新"""
@@ -129,57 +190,60 @@ def is_newer_than_last_crawl(entry, last_crawl: str) -> bool:
 
 
 def is_after_2023(entry) -> bool:
-    """时间闸门：绝对放行 2023 年 1 月 1 日及之后的所有情报"""
+    """时间闸门：绝对放行 2023 年 1 月及之后的所有情报"""
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
         pub_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
         if pub_time < datetime(2023, 1, 1):
             return False
     return True
 
+
 def is_high_value_intel(title: str, summary: str, content: str, url: str) -> bool:
     """情报过滤器：判断是否包含核心行业价值"""
     if any(domain in url for domain in WHITELIST_DOMAINS):
         return True
-        
+
     text_to_scan = (title + " " + summary + " " + content).lower()
     for kw in AI_KEYWORDS:
         if kw in text_to_scan:
             return True
-            
+
     return False
 
-def parse_feed(feed_url: str, history: set, last_crawl: str = None) -> list:
+
+def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -> list:
     try:
         feed = feedparser.parse(feed_url)
-        if not feed.entries: return []
-        
+        if not feed.entries:
+            return []
+
         valid_articles = []
-        # 💡 解除 [:100] 的限制，直接遍历 RSS 源能提供的所有历史数据
         for entry in feed.entries:
             url = getattr(entry, 'link', '')
             title = getattr(entry, 'title', '')
             summary = getattr(entry, 'summary', getattr(entry, 'description', ''))
-            
+
             content = ''
             if hasattr(entry, 'content') and len(entry.content) > 0:
                 content = entry.content[0].value
-                
+
             if not url or url in history:
                 continue
 
             # 增量更新：跳过上次抓取时间之前的旧内容
             if not is_newer_than_last_crawl(entry, last_crawl):
                 continue
-                
+
             # 严格执行 2023 年时间线底线，并过滤硬核内容
             if is_after_2023(entry) and is_high_value_intel(title, summary, content, url):
                 valid_articles.append(url)
-                
+
         log(f"  ✅ 发现 {len(feed.entries)} 篇，提纯出 {len(valid_articles)} 篇极密情报")
         return valid_articles
     except Exception as e:
         log(f"  ❌ 解析失败: {e}")
         return []
+
 
 def send_to_api(url: str) -> bool:
     try:
@@ -193,23 +257,26 @@ def send_to_api(url: str) -> bool:
         log(f"    ❌ 通讯阻断: {e}")
         return False
 
+
 def run_auto_feeder():
     log("=" * 60)
     log("🚀 AI Tracker - 战略巡航舰启动 (V4 历史全收录模式, Base: 2023-01-01)")
+    log(f"   API URL: {API_URL}")
+    log(f"   历史记录上限: {MAX_HISTORY_SIZE}")
     log("=" * 60)
-    
+
     log("📡 加载情报源...")
     feeds = load_feeds()
     if not feeds:
         log("❌ 弹药库 (feeds.json 和 feeds_v2.json) 都为空！")
         return
-        
-    history_list = load_json_file(HISTORY_FILE, [])
-    history_set = set(history_list)
-    
+
+    # 使用内存高效的历史记录管理器
+    history = HistoryManager(HISTORY_FILE, max_size=MAX_HISTORY_SIZE)
+    log(f"   📜 已加载 {len(history)} 条历史记录")
+
     total_pushed = 0
-    new_history = list(history_list)
-    
+
     # 增量更新：加载每个feed的最后抓取时间
     feed_metadata = load_feed_metadata()
     new_metadata = dict(feed_metadata)  # 复制一份用于更新
@@ -222,29 +289,25 @@ def run_auto_feeder():
         else:
             log(f"   🆕 首次抓取，全量模式")
 
-        target_urls = parse_feed(feed_url, history_set, feed_metadata.get(feed_url))
+        target_urls = parse_feed(feed_url, history, feed_metadata.get(feed_url))
         # 更新该feed的抓取时间
         new_metadata[feed_url] = datetime.now().isoformat()
 
-        
         for url in target_urls:
             log(f"    -> 锁定目标: {url}")
             if send_to_api(url):
-                new_history.append(url)
-                history_set.add(url)
+                history.add(url)
                 total_pushed += 1
-            time.sleep(0.5) # 控制并发避免打挂后端
-            
-    # 💡 极其重要：放宽历史去重记忆池至 100,000 条，防止因为抓取量暴增导致旧数据被错误遗忘和重复抓取
-    if len(new_history) > 100000:
-        new_history = new_history[-100000:]
-        
-    # 保存URL历史
-    save_json_file(HISTORY_FILE, new_history)
-    # 保存每个feed的最后抓取时间
+            time.sleep(0.5)  # 控制并发避免打挂后端
+
+    # 保存URL历史和元数据
+    history.save()
     save_feed_metadata(new_metadata)
+
     log("=" * 60)
     log(f"🎉 巡航结束！本次成功向 V8 引擎输送了 {total_pushed} 篇情报。")
+    log(f"   当前历史记录总数: {len(history)}")
+
 
 if __name__ == "__main__":
     run_auto_feeder()

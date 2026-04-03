@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
-import time      
+import time
 import random
 from typing import List, Optional
 from datetime import datetime
@@ -37,6 +37,12 @@ from ontology import (
 from database import query_all_entities
 
 
+# ── 可配置的限流参数 ───────────────────────────────────────────────────────────
+# 环境变量可覆盖默认值
+DEFAULT_API_COOLDOWN = float(os.environ.get("EXTRACTOR_API_COOLDOWN", "1.0"))  # 默认 1 秒，原 2.5 秒
+MAX_API_COOLDOWN = float(os.environ.get("EXTRACTOR_MAX_COOLDOWN", "5.0"))      # 最大冷却时间
+
+
 # ── 单例模式 ────────────────────────────────────────────────────────────────
 _extractor_client = None
 
@@ -61,16 +67,16 @@ def create_extractor():
 def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionResult:
     """
     从文本中提取知识
-    
+
     Args:
         text: 输入文本
         context_entities_str: 现有实体上下文（用于实体对齐）
-        
+
     Returns:
         ExtractionResult: 包含实体、事件、关系的结构化结果
     """
     extractor = create_extractor()
-    
+
     # 构建系统提示词
     system_prompt = f"""你是一个专业的知识提取助手。你的任务是从给定的文本中提取结构化的知识，包括：
 
@@ -103,10 +109,10 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 {context_entities_str}
 
 请严格按照JSON格式返回结果。"""
-    
+
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
-        model="MiniMax-M2.7",
+        model="MiniMax-M2",
         max_tokens=8000,
         system=system_prompt,
         messages=[
@@ -117,7 +123,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
         ],
         response_model=ExtractionResult,
     )
-    
+
     return result
 
 
@@ -146,14 +152,16 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
     valid_events = []
     for event in result.events:
         # 1. 日期校验
+        event_date = None
         try:
             event_date = event.date
             if hasattr(event_date, 'year'):
                 if event_date < min_date or event_date > max_date:
                     print(f"⚠️ 过滤异常日期事件: {event.title[:30]}... (日期: {event_date.year})")
                     continue
-        except:
-            pass
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"⚠️ 过滤日期解析失败的事件: {event.title[:30]}... 错误: {e}")
+            continue
 
         # 2. 相关性校验 - 检查标题和摘要是否包含AI相关关键词
         text_to_check = (event.title + " " + event.summary).lower()
@@ -181,12 +189,14 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
 def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
+
+    修复：使用可配置的冷却时间，减少不必要的阻塞等待
     """
     # 获取现有实体库，但只注入文本中实际提到的实体
     from database import query_all_entities # 确保在作用域内
     existing_entities = query_all_entities()
     text_lower = text.lower()
-    
+
     # 过滤：只保留文本中提到的实体
     matched_entities = []
     for e in existing_entities:
@@ -203,62 +213,64 @@ def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult
                     if alias.lower() in text_lower:
                         matched_entities.append(e)
                         break
-            except:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 pass
-    
+
     context_entities_str = ""
     if matched_entities:
         context_entities_str = "\n【现有实体库参考】(极度重要)\n如果在文本中发现以下实体（或其别名），你**必须**严格复用对应的【现有 ID】，绝对不能生成新 ID：\n"
         for e in matched_entities:
             context_entities_str += f"- 现有 ID: {e['id']} | 名称: {e['name']} | 类型: {e['type']}\n"
-    
+
     for attempt in range(max_retries):
         try:
             result = extract_knowledge(text, context_entities_str)
-            
+
             # 基本验证
             if result is None:
                 raise ValueError("返回结果为空")
-            
+
             # 确保实体不为空
             if not result.entities:
                 print(f"⚠️ 第 {attempt + 1} 次尝试未提取到实体，休眠 2 秒后重试...")
                 time.sleep(2)
                 continue
-                
-            # ✅ 成功提取！核心防御：不论多快，强制休眠 2.5 秒，将基础 QPS 压制在安全线内
-            print("✅ 成功调用 MiniMax API，强制休眠 2.5 秒以保护账户余额与并发额度...")
-            time.sleep(2.5) 
+
+            # ✅ 成功提取！使用可配置的冷却时间保护账户余额与并发额度
+            cooldown = min(DEFAULT_API_COOLDOWN + random.uniform(0, 0.5), MAX_API_COOLDOWN)
+            print(f"✅ 成功调用 MiniMax API，休眠 {cooldown:.1f} 秒以保护账户余额与并发额度...")
+            time.sleep(cooldown)
 
             # 🛡️ 质量门禁：过滤低质量、异常日期、无关事件
             result = validate_extraction_result(result)
 
             return result
-            
+
         except Exception as e:
             error_msg = str(e).lower()
             print(f"❌ 提取失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            
-            # 🚨 终极防御：精准拦截 429 限流报错
+
+            # 🚨 限流报错：指数退避算法
             if "429" in error_msg or "too many requests" in error_msg or "rate limit" in error_msg:
-                # 指数退避算法：2秒, 4秒, 8秒... 再加上 0~1 秒的随机抖动
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
+                wait_time = min(wait_time, MAX_API_COOLDOWN)  # 不超过最大冷却时间
                 print(f"🛡️ 触发 MiniMax 官方限流！启动防爆盾，休眠 {wait_time:.1f} 秒后重试...")
                 time.sleep(wait_time)
-                
-            # 如果是 token 限制错误，减少上下文重试
+
+            # token 限制错误，减少上下文重试
             elif "length" in error_msg or "token" in error_msg:
                 print("📉 检测到 token 限制，缩减上下文后休眠重试...")
                 context_entities_str = ""
                 time.sleep(2)
+
             else:
                 # 其他网络波动错误
                 time.sleep(2)
-            
+
             if attempt == max_retries - 1:
                 print("☠️ 达到最大重试次数，放弃当前文本！")
                 raise
-    
+
     # 如果所有尝试都失败，返回空结果
     return ExtractionResult(
         entities=[],
@@ -273,22 +285,22 @@ def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult
 if __name__ == "__main__":
     # 测试文本
     test_text = """2024年2月16日，人工智能巨头 OpenAI 正式发布了首个文生视频大模型 Sora。CEO Sam Altman 表示，这是实现 AGI 的重要一步。Sora 采用了独特的 Diffusion Transformer 架构。"""
-    
+
     print("=" * 60)
     print("🧪 开始测试 AI 提取功能")
     print("=" * 60)
     print(f"\n📝 输入文本:\n{test_text}\n")
-    
+
     try:
         result = extract_with_validation(test_text)
-        
+
         print("✅ 提取成功!\n")
         print("=" * 60)
         print("📊 结构化 JSON 结果:")
         print("=" * 60)
         # 使用 model_dump_json 直接序列化，支持 datetime
         print(result.model_dump_json(indent=2, ensure_ascii=False))
-        
+
     except Exception as e:
         print(f"❌ 提取失败: {e}")
         import traceback

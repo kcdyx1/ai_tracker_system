@@ -221,6 +221,190 @@ async def get_graph_data(entity_id: str = None):
         print(f"❌ Neo4j 图谱 API 崩溃: {e}")
         return {"nodes": [], "links": []}
 
+
+# Papers API
+@app.get("/api/papers")
+async def get_papers(
+    limit: int = 50,
+    category: str = None,
+    min_citations: int = 0,
+    sort_by: str = "published_date"
+):
+    """获取学术论文列表"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        query = "SELECT * FROM papers WHERE 1=1"
+        params = []
+
+        if category:
+            query += " AND categories LIKE ?"
+            params.append(f"%{category}%")
+
+        if min_citations > 0:
+            query += " AND citation_count >= ?"
+            params.append(min_citations)
+
+        if sort_by == "citations":
+            query += " ORDER BY citation_count DESC"
+        elif sort_by == "title":
+            query += " ORDER BY title"
+        else:
+            query += " ORDER BY published_date DESC"
+
+        query += " LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        papers = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            if d.get('authors') and isinstance(d['authors'], str):
+                try:
+                    d['authors'] = json.loads(d['authors'])
+                except:
+                    d['authors'] = [d['authors']]
+            if d.get('categories') and isinstance(d['categories'], str):
+                try:
+                    d['categories'] = json.loads(d['categories'])
+                except:
+                    d['categories'] = [d['categories']]
+            if d.get('raw_metadata') and isinstance(d['raw_metadata'], str):
+                try:
+                    d['raw_metadata'] = json.loads(d['raw_metadata'])
+                except:
+                    pass
+            papers.append(d)
+        return papers
+    finally:
+        conn.close()
+
+@app.get("/api/papers/{paper_id}")
+async def get_paper_detail(paper_id: str):
+    """获取论文详情"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM papers WHERE id = ?", (paper_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {"error": "Paper not found"}, 404
+        d = dict(row)
+        if d.get('authors') and isinstance(d['authors'], str):
+            try:
+                d['authors'] = json.loads(d['authors'])
+            except:
+                d['authors'] = [d['authors']]
+        if d.get('categories') and isinstance(d['categories'], str):
+            try:
+                d['categories'] = json.loads(d['categories'])
+            except:
+                d['categories'] = [d['categories']]
+        return d
+    finally:
+        conn.close()
+
+@app.get("/api/papers/stats")
+async def get_papers_stats():
+    """获取论文统计"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as total FROM papers")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT SUM(citation_count) as citations FROM papers")
+        citations = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(DISTINCT arxiv_id) FROM papers WHERE arxiv_id IS NOT NULL")
+        unique_arxiv = cursor.fetchone()[0]
+        return {
+            "total": total,
+            "total_citations": citations,
+            "unique_arxiv_papers": unique_arxiv
+        }
+    finally:
+        conn.close()
+
+# Repositories API
+@app.get("/api/repositories")
+async def get_repositories(
+    limit: int = 50,
+    language: str = None,
+    min_stars: int = 0,
+    sort_by: str = "stars"
+):
+    """获取 GitHub 仓库列表"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        query = "SELECT * FROM repositories WHERE 1=1"
+        params = []
+
+        if language:
+            query += " AND (language = ? OR primary_language = ?)"
+            params.extend([language, language])
+
+        if min_stars > 0:
+            query += " AND stars >= ?"
+            params.append(min_stars)
+
+        if sort_by == "stars":
+            query += " ORDER BY stars DESC"
+        elif sort_by == "forks":
+            query += " ORDER BY forks DESC"
+        elif sort_by == "name":
+            query += " ORDER BY name"
+        else:
+            query += " ORDER BY trending_date DESC"
+
+        query += " LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        repos = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            if d.get('topics') and isinstance(d['topics'], str):
+                try:
+                    d['topics'] = json.loads(d['topics'])
+                except:
+                    d['topics'] = [d['topics']]
+            if d.get('languages') and isinstance(d['languages'], str):
+                try:
+                    d['languages'] = json.loads(d['languages'])
+                except:
+                    pass
+            if d.get('raw_metadata') and isinstance(d['raw_metadata'], str):
+                try:
+                    d['raw_metadata'] = json.loads(d['raw_metadata'])
+                except:
+                    pass
+            repos.append(d)
+        return repos
+    finally:
+        conn.close()
+
+@app.get("/api/repositories/stats")
+async def get_repositories_stats():
+    """获取仓库统计"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as total FROM repositories")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT SUM(stars) as stars FROM repositories")
+        stars = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(DISTINCT language) as languages FROM repositories")
+        languages = cursor.fetchone()[0]
+        return {
+            "total": total,
+            "total_stars": stars,
+            "unique_languages": languages
+        }
+    finally:
+        conn.close()
+
 @app.get("/api/events")
 async def get_events(limit: int = 30):
     """获取最新事件流"""
@@ -244,15 +428,40 @@ async def get_tasks():
 
 @app.get("/api/entity/{entity_id}")
 async def get_entity_details(entity_id: str):
-    """精准调取单体档案及关联情报"""
+    """精准调取单体档案及关联情报（SQLite 优先，Neo4j 兜底）"""
     try:
         entity = query_entity_by_id(entity_id)
+
+        # SQLite 没有？查 Neo4j 作为兜底
+        if not entity:
+            try:
+                from neo_client import neo_db
+                rows = neo_db.execute_query(
+                    "MATCH (e:Entity {id: $entity_id}) RETURN e.id AS id, e.name AS name, labels(e)[0] AS type, e.description AS description",
+                    {"entity_id": entity_id}
+                )
+                if rows and rows[0]:
+                    r = rows[0]
+                    entity = {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "type": r.get("type", "unknown"),
+                        "description": r.get("description") or "",
+                        "aliases_json": "[]",
+                        "created_at": "",
+                        "attributes_json": None,
+                    }
+            except Exception as neo_err:
+                log(f"⚠️ Neo4j 兜底查询失败: {neo_err}")
+
         if not entity:
             raise HTTPException(status_code=404, detail="实体档案不存在")
 
         # 捞取与该实体相关的最新 10 条事件
         events = get_events_for_entity(entity_id)
         return {"entity": entity, "events": events[:10]}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

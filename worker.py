@@ -83,6 +83,14 @@ def process_intel_task(self, task_id: int, url: str):
         raise self.retry(exc=e, countdown=60)
 
 
+def _build_in_clause(ids: list) -> tuple[str, list]:
+    """构建安全的 SQL IN 子句，返回 (placeholders, params)"""
+    if not ids:
+        return "('__invalid__')", []
+    placeholders = ','.join('?' * len(ids))
+    return f'({placeholders})', ids
+
+
 @celery_app.task
 def deduplicate_entities():
     """每天定时执行实体去重合并"""
@@ -124,7 +132,7 @@ def deduplicate_entities():
                     try:
                         attrs = json.loads(attrs_str)
                         score += len([v for v in attrs.values() if v and str(v) not in ('[]', '{}', 'null', 'None', '')])
-                    except:
+                    except (json.JSONDecodeError, ValueError):
                         pass
                 return score
 
@@ -133,31 +141,38 @@ def deduplicate_entities():
             primary_id = rows[0][0]
             duplicate_ids = [r[0] for r in rows[1:]]
 
-            # 将重复实体的关系转移到主实体
-            cursor.execute("""
+            if not duplicate_ids:
+                continue
+
+            # 将重复实体的关系转移到主实体 (使用参数化查询)
+            in_clause, in_params = _build_in_clause(duplicate_ids)
+            cursor.execute(f"""
                 UPDATE relationships
                 SET source_id = ?
-                WHERE source_id IN (%s)
-            """ % ','.join('?' * len(duplicate_ids)), [primary_id] + duplicate_ids)
+                WHERE source_id IN {in_clause}
+            """, [primary_id] + in_params)
 
-            cursor.execute("""
+            in_clause, in_params = _build_in_clause(duplicate_ids)
+            cursor.execute(f"""
                 UPDATE relationships
                 SET target_id = ?
-                WHERE target_id IN (%s)
-            """ % ','.join('?' * len(duplicate_ids)), [primary_id] + duplicate_ids)
+                WHERE target_id IN {in_clause}
+            """, [primary_id] + in_params)
 
             # 将事件关联到主实体
-            cursor.execute("""
+            in_clause, in_params = _build_in_clause(duplicate_ids)
+            cursor.execute(f"""
                 UPDATE events
                 SET entity_id = ?
-                WHERE entity_id IN (%s)
-            """ % ','.join('?' * len(duplicate_ids)), [primary_id] + duplicate_ids)
+                WHERE entity_id IN {in_clause}
+            """, [primary_id] + in_params)
 
             # 删除重复实体
-            cursor.execute("""
+            in_clause, in_params = _build_in_clause(duplicate_ids)
+            cursor.execute(f"""
                 DELETE FROM entities
-                WHERE id IN (%s)
-            """ % ','.join('?' * len(duplicate_ids)), duplicate_ids)
+                WHERE id IN {in_clause}
+            """, in_params)
 
             total_merged += len(duplicate_ids)
 

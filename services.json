@@ -1,0 +1,165 @@
+{
+  "_meta": {
+    "project_name": "ai_tracker_system",
+    "project_path": "/home/kangchen/.openclaw/workspace/ai_tracker_system",
+    "venv_path": "/home/kangchen/.openclaw/workspace/ai_tracker_system/.venv/bin/python3",
+    "user": "kangchen",
+    "description": "AI 产业情报追踪系统服务配置"
+  },
+  "services": [
+    {
+      "id": "ai_tracker_server",
+      "name": "AI Tracker API 服务",
+      "type": "long_running",
+      "executor": "uvicorn",
+      "args": [
+        "server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "2"
+      ],
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "restart": "always",
+      "restart_sec": 10,
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_worker",
+      "name": "AI Tracker Celery Worker",
+      "type": "long_running",
+      "executor": "celery",
+      "args": [
+        "-A",
+        "worker.celery_app",
+        "worker",
+        "--loglevel=info",
+        "-c",
+        "4"
+      ],
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "restart": "always",
+      "restart_sec": 30,
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_beat",
+      "name": "AI Tracker Celery Beat (定时调度器)",
+      "type": "long_running",
+      "executor": "celery",
+      "args": [
+        "-A",
+        "worker.celery_app",
+        "beat",
+        "--loglevel=info"
+      ],
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "restart": "always",
+      "restart_sec": 30,
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_feeder",
+      "name": "AI Tracker RSS 巡航",
+      "type": "scheduled",
+      "executor": "python",
+      "script": "collector.py",
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "schedule": {
+        "type": "interval",
+        "interval": "30m",
+        "random_delay": "5m"
+      },
+      "restart": "on-failure",
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_reporter",
+      "name": "AI Tracker 飞书简报推送",
+      "type": "scheduled",
+      "executor": "python",
+      "script": "reporter.py",
+      "args": [
+        "daily"
+      ],
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "schedule": {
+        "type": "cron",
+        "oncalendar": "*-*-* 08:00:00",
+        "description": "每天早上 8:00 执行"
+      },
+      "restart": "on-failure",
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_reporter_weekly",
+      "name": "AI Tracker 每周深度内参",
+      "type": "scheduled",
+      "executor": "python",
+      "script": "reporter.py",
+      "args": [
+        "weekly"
+      ],
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "schedule": {
+        "type": "cron",
+        "oncalendar": "Mon *-*-01 09:00:00",
+        "description": "每周一早上 9:00 执行"
+      },
+      "restart": "on-failure",
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_rescue",
+      "name": "AI Tracker 僵尸任务救援",
+      "type": "scheduled",
+      "executor": "python",
+      "script": "rescue.py",
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "schedule": {
+        "type": "interval",
+        "interval": "30m",
+        "random_delay": "1m"
+      },
+      "restart": "on-failure",
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "id": "ai_tracker_mcp",
+      "name": "AI Tracker MCP Server",
+      "type": "long_running",
+      "executor": "python",
+      "script": "mcp_server.py",
+      "working_dir": "%(project_path)s",
+      "env": {},
+      "restart": "always",
+      "restart_sec": 10,
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    }
+  ]
+}
