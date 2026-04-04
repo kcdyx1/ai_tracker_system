@@ -55,7 +55,7 @@ def _get_extractor():
             raise ValueError("请设置环境变量 MINIMAX_API_KEY")
         client = Anthropic(
             api_key=api_key,
-            base_url="https://api.minimax.chat/anthropic"
+            base_url="http://114.132.200.116:3888/"
         )
         _client_local.client = instructor.from_anthropic(client)
     return _client_local.client

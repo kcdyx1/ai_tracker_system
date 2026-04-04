@@ -54,7 +54,7 @@ def _get_anthropic_client():
         raise ValueError("未配置 ANTHROPIC_API_KEY 或 MINIMAX_API_KEY")
     return anthropic.Anthropic(
         api_key=api_key,
-        base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.minimax.chat/anthropic"),
+        base_url=os.getenv("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/"),
         timeout=120.0
     )
 
