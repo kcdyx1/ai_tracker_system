@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, BookOpen, Star, GitFork, ExternalLink, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap } from 'lucide-react'
+import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, BookOpen, Star, GitFork, ExternalLink, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap, Terminal, CheckCircle, RefreshCw, Play, Square, AlertCircle } from 'lucide-react'
 import axios from 'axios'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
@@ -1160,6 +1160,222 @@ const RepositoriesDashboard = () => {
 }
 
 
+
+// ============================================================================
+// 组件: 🖥️ 系统运维 (SysOps) - 日志查看 & 服务控制
+// ============================================================================
+const SysOps = () => {
+  const [selectedLog, setSelectedLog] = useState<string>("celery_worker")
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [totalLines, setTotalLines] = useState(0)
+  const [logLoading, setLogLoading] = useState(false)
+  const [serviceStatus, setServiceStatus] = useState<Record<string, any>>({})
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [actionResult, setActionResult] = useState<string | null>(null)
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  const LOG_OPTIONS = [
+    { value: "celery_worker", label: "Celery Worker" },
+    { value: "feeder", label: "Auto Feeder" },
+    { value: "reporter", label: "Reporter" },
+    { value: "server", label: "Server" },
+    { value: "celery_beat", label: "Celery Beat" },
+  ]
+
+  const fetchLogs = useCallback(async () => {
+    setLogLoading(true)
+    try {
+      const res = await axios.get(`/api/logs?log_name=${selectedLog}&lines=200`)
+      setLogLines(res.data.lines || [])
+      setTotalLines(res.data.total_lines || 0)
+    } catch (e) {
+      console.error("Failed to fetch logs", e)
+    } finally {
+      setLogLoading(false)
+    }
+  }, [selectedLog])
+
+  useEffect(() => { fetchLogs() }, [fetchLogs])
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [logLines])
+
+  const fetchServiceStatus = async () => {
+    const services = ["ai-celery", "ai-server", "ai-mcp"]
+    const statuses: Record<string, any> = {}
+    for (const s of services) {
+      try {
+        const res = await axios.post(`/api/service/control?action=status&service_name=${s}`)
+        statuses[s] = res.data
+      } catch { statuses[s] = { active: false, error: "请求失败" } }
+    }
+    setServiceStatus(statuses)
+  }
+
+  const restartWorker = async () => {
+    setActionLoading("restart-worker")
+    setActionResult(null)
+    try {
+      const res = await axios.post("/api/service/worker/restart")
+      setActionResult(res.data.success ? `Worker 重启成功，PIDs: ${res.data.pids?.join(", ")}` : `Worker 重启失败`)
+    } catch (e: any) {
+      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const startWorker = async () => {
+    setActionLoading("start-worker")
+    setActionResult(null)
+    try {
+      const res = await axios.post("/api/service/worker/start")
+      setActionResult(res.data.success ? `Worker 启动成功，PIDs: ${res.data.pids?.join(", ")}` : `Worker 启动失败`)
+    } catch (e: any) {
+      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const stopWorker = async () => {
+    setActionLoading("stop-worker")
+    setActionResult(null)
+    try {
+      const res = await axios.post("/api/service/worker/stop")
+      setActionResult(res.data.success ? "Worker 已停止" : "Worker 停止失败")
+    } catch (e: any) {
+      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const runFeeder = async () => {
+    setActionLoading("run-feeder")
+    setActionResult(null)
+    try {
+      const res = await axios.post("/api/feeder/run")
+      setActionResult(res.data.success ? `Feeder 已启动 (PID: ${res.data.pid})` : res.data.output)
+    } catch (e: any) {
+      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  useEffect(() => { fetchServiceStatus() }, [])
+
+  const isLoading = (action: string) => actionLoading === action
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div>
+        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-amber-300">🖥️ 系统运维</h1>
+        <p className="text-slate-400 mt-2">日志查看 & 服务控制中心</p>
+      </div>
+
+      {/* 服务控制面板 */}
+      <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-6">
+        <h3 className="text-lg font-semibold text-slate-200 mb-4 flex items-center"><Terminal className="w-5 h-5 mr-2 text-orange-400" />服务控制</h3>
+
+        {/* Celery Worker 快捷控制 */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <button onClick={restartWorker} disabled={isLoading("restart-worker")}
+            className="flex items-center justify-center px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 transition-all disabled:opacity-50">
+            {isLoading("restart-worker") ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+            <span className="ml-2 font-medium">重启 Worker</span>
+          </button>
+          <button onClick={startWorker} disabled={isLoading("start-worker")}
+            className="flex items-center justify-center px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 transition-all disabled:opacity-50">
+            {isLoading("start-worker") ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+            <span className="ml-2 font-medium">启动 Worker</span>
+          </button>
+          <button onClick={stopWorker} disabled={isLoading("stop-worker")}
+            className="flex items-center justify-center px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 transition-all disabled:opacity-50">
+            {isLoading("stop-worker") ? <Loader2 className="w-5 h-5 animate-spin" /> : <Square className="w-5 h-5" />}
+            <span className="ml-2 font-medium">停止 Worker</span>
+          </button>
+          <button onClick={runFeeder} disabled={isLoading("run-feeder")}
+            className="flex items-center justify-center px-4 py-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/20 transition-all disabled:opacity-50">
+            {isLoading("run-feeder") ? <Loader2 className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5" />}
+            <span className="ml-2 font-medium">触发 Feeder</span>
+          </button>
+        </div>
+
+        {/* 系统服务状态 */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {Object.entries(serviceStatus).map(([name, data]: [string, any]) => (
+            <div key={name} className={`p-4 rounded-xl border ${data?.active ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-sm text-slate-300">{name}</span>
+                {data?.active
+                  ? <CheckCircle className="w-5 h-5 text-emerald-400" />
+                  : <XCircle className="w-5 h-5 text-rose-400" />}
+              </div>
+              <div className="text-xs mt-1 text-slate-500">{data?.output || data?.error || 'unknown'}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 操作结果提示 */}
+        {actionResult && (
+          <div className="mt-4 p-3 rounded-xl bg-slate-800/80 border border-slate-700 text-sm font-mono text-slate-300">
+            {actionResult}
+          </div>
+        )}
+      </div>
+
+      {/* 日志查看器 */}
+      <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl overflow-hidden">
+        <div className="p-6 border-b border-slate-700/50 flex items-center justify-between flex-wrap gap-4">
+          <h3 className="text-lg font-semibold text-slate-200 flex items-center">
+            <FileText className="w-5 h-5 mr-2 text-orange-400" />
+            日志查看器
+          </h3>
+          <div className="flex items-center gap-3">
+            <select value={selectedLog} onChange={e => setSelectedLog(e.target.value)}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300 focus:border-orange-500 outline-none">
+              {LOG_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <button onClick={fetchLogs}
+              className="flex items-center px-4 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 transition-all">
+              <RefreshCw className={`w-4 h-4 mr-2 ${logLoading ? 'animate-spin' : ''}`} />
+              刷新
+            </button>
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="text-xs text-slate-500 mb-2 font-mono">共 {totalLines} 行，显示最近 200 行</div>
+          <div className="bg-slate-950 rounded-xl p-4 h-96 overflow-y-auto font-mono text-xs leading-relaxed border border-slate-800">
+            {logLoading ? (
+              <div className="flex items-center justify-center h-full text-slate-500">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" /> 加载中...
+              </div>
+            ) : logLines.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-slate-500">
+                <AlertCircle className="w-5 h-5 mr-2" /> 暂无日志内容
+              </div>
+            ) : (
+              logLines.map((line, i) => (
+                <div key={i} className={`py-0.5 ${line.includes('ERROR') ? 'text-rose-400' : line.includes('WARNING') || line.includes('⚠️') ? 'text-amber-400' : line.includes('success') || line.includes('✅') ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  {line}
+                </div>
+              ))
+            )}
+            <div ref={logEndRef} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+}
+
+
 function App() {
   const [activeTab, setActiveTab] = useState('ops') // 回到指挥中心默认页
 
@@ -1170,6 +1386,7 @@ function App() {
     { id: 'repos', label: '开源项目', icon: <Star className="w-5 h-5" /> },
     { id: 'graph', label: '战术图谱', icon: <Network className="w-5 h-5" /> },
     { id: 'chat', label: '参谋部', icon: <MessageSquare className="w-5 h-5" /> },
+    { id: 'sys', label: '系统运维', icon: <Terminal className="w-5 h-5" /> },
   ]
 
   return (
@@ -1199,6 +1416,7 @@ function App() {
         {activeTab === 'repos' && <RepositoriesDashboard />}
         {activeTab === 'graph' && <TacticalGraph />}
         {activeTab === 'chat' && <CopilotChat />}
+        {activeTab === 'sys' && <SysOps />}
       </main>
         {/* 📱 移动端专属底部导航栏 (只在手机屏幕显示) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 z-50 flex justify-around items-center h-16 pb-safe shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">

@@ -389,9 +389,7 @@ def ensure_fts_tables() -> None:
                    COALESCE(description, '') || ' ' ||
                    COALESCE(attributes_json, '')
             FROM entities e
-            WHERE NOT EXISTS (
-                SELECT 1 FROM entities_fts f WHERE f.entity_id = e.id
-            )
+            WHERE e.id NOT IN (SELECT entity_id FROM entities_fts)
         """)
         conn.commit()
 
@@ -410,9 +408,7 @@ def ensure_fts_tables() -> None:
             INSERT INTO events_fts(event_id, title, summary)
             SELECT id, COALESCE(title, ''), COALESCE(summary, '')
             FROM events e
-            WHERE NOT EXISTS (
-                SELECT 1 FROM events_fts f WHERE f.event_id = e.id
-            )
+            WHERE e.id NOT IN (SELECT event_id FROM events_fts)
         """)
         conn.commit()
 

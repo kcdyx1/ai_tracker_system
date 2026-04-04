@@ -67,6 +67,10 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 app = FastAPI(title="AI Tracker System API", lifespan=lifespan)
 
+# Register system ops endpoints
+from sys_ops_endpoints import register_sys_ops_endpoints
+register_sys_ops_endpoints(app)
+
 # 允许 React 跨域请求
 app.add_middleware(
     CORSMiddleware,
