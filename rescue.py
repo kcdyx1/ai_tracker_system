@@ -34,7 +34,6 @@ def rescue_pending_tasks():
         tid = task["id"]
         url = task["url"]
         process_intel_task.delay(tid, url)
-        update_task_status(tid, "processing")
         print(f"  -> Re-queued task #{tid}: {url}")
         count += 1
 

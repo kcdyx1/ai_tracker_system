@@ -49,8 +49,8 @@ def process_intel_task(self, task_id: int, url: str):
         cur = conn.cursor()
         cur.execute("SELECT status FROM task_queue WHERE id = ?", (task_id,))
         row = cur.fetchone()
-        if row and row[0] in ("completed", "processing"):
-            print(f"  skip: task #{task_id} status={row[0]}")
+        if row and row[0] == "completed":
+            print(f"  skip: task #{task_id} already completed")
             return
     finally:
         conn.close()
