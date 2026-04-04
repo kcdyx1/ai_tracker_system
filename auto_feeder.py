@@ -238,9 +238,14 @@ def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -
             if not url or url in history:
                 continue
 
-            # 增量更新：跳过上次抓取时间之前的旧内容
-            if not is_newer_than_last_crawl(entry, last_crawl):
-                continue
+            # 白名单域名跳过时间过滤（arxiv等来源的published_parsed是论文投稿时间，
+            # 而非RSS发布时间，需要信任这些高质量来源）
+            in_whitelist = any(domain in url for domain in WHITELIST_DOMAINS)
+
+            if not in_whitelist:
+                # 增量更新：跳过上次抓取时间之前的旧内容（非白名单来源）
+                if not is_newer_than_last_crawl(entry, last_crawl):
+                    continue
 
             # 严格执行 2023 年时间线底线，并过滤硬核内容
             if is_after_2023(entry) and is_high_value_intel(title, summary, content, url):
