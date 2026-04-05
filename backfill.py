@@ -2,20 +2,13 @@
 """
 backfill.py - 历史数据回填引擎
 独立于日常跟踪，按需触发，批量导入 2019-01-01 以来的重要事件
-
-用法:
-  python backfill.py                    # 回填全部数据源
-  python backfill.py -s wikipedia      # 只回填指定数据源
-  python backfill.py --reset           # 重置进度
 """
 import os
 import sys
 import time
 import json
-import signal
 import logging
-import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List
 
@@ -35,10 +28,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("backfill")
 
-MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "sk-xv7avxH7fcB3pN3INjuSHsvfIzzYDB6itaz60IsMP404QtKx")
-MINIMAX_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/")
-
-
 # ── 进度管理 ─────────────────────────────────────────────────────────────
 def load_progress():
     if PROGRESS_FILE.exists():
@@ -52,7 +41,7 @@ def save_progress(progress):
         json.dump(progress, f, indent=2)
 
 
-# ── URL 去重检查 ──────────────────────────────────────────────────────────
+# ── 任务推送 ──────────────────────────────────────────────────────────────
 def task_exists(url: str) -> bool:
     sys.path.insert(0, str(ROOT))
     from database import get_connection
@@ -66,9 +55,42 @@ def task_exists(url: str) -> bool:
 
 
 def push_task(url: str) -> bool:
+    """Write to SQLite and dispatch to Celery with lowest priority (9)"""  
     sys.path.insert(0, str(ROOT))
-    from database import push_task
-    return push_task(url)
+    from database import get_connection
+    from worker import process_intel_task
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, status FROM task_queue WHERE url = ?", (url,))
+        row = c.fetchone()
+        if row is None:
+            from datetime import datetime as dt
+            now = dt.now(timezone.utc).isoformat()
+            c.execute(
+                "INSERT INTO task_queue (url, status, created_at) VALUES (?, 'pending', ?)",
+                (url, now)
+            )
+            conn.commit()
+            task_id = c.lastrowid
+            # Priority 9 = lowest, does not compete with daily tasks
+            process_intel_task.apply_async(args=[task_id, url], priority=9)
+            return True
+        elif row[1] in ('failed', 'completed'):
+            from datetime import datetime as dt
+            now = dt.now(timezone.utc).isoformat()
+            c.execute(
+                "UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = ? WHERE url = ?",
+                (now, url)
+            )
+            conn.commit()
+            process_intel_task.apply_async(args=[row[0], url], priority=9)
+            return True
+        else:
+            return False
+    finally:
+        conn.close()
 
 
 # ── 数据源基类 ─────────────────────────────────────────────────────────────
@@ -83,109 +105,52 @@ class Source:
 
 # ── Wikipedia On-This-Day ──────────────────────────────────────────────────
 class WikipediaOnThisDay(Source):
-    """
-    Wikipedia On-This-Day: 每天的历史事件
-    生成 2019-01-01 以来的每月每日 URL
-    """
-
     def get_urls(self) -> List[str]:
         urls = []
         start = datetime(2019, 1, 1, tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
-
         current = start
         while current <= now:
-            month = current.strftime("%m")
-            day = current.strftime("%d")
-            # Wikipedia On-This-Day 事件页面
-            url = f"https://en.wikipedia.org/wiki/{current.strftime('%B_%d')}"
+            url = "https://en.wikipedia.org/wiki/" + current.strftime("%B_%d")
             urls.append(url)
             # 下一天
             if current.month == 12 and current.day == 31:
                 current = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
             else:
-                day_of_year = current.timetuple().tm_yday
-                if day_of_year >= 365 and current.month == 12:
-                    current = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
-                else:
-                    from datetime import timedelta
-                    current = current + timedelta(days=1)
-
-        log.info(f"[Wikipedia] 生成 {len(urls)} 个日期页面")
-        return urls
-
-
-# ── Wikipedia Featured Articles (历史上的今天) ─────────────────────────────
-class WikipediaFeaturedArticles(Source):
-    """
-    Wikipedia Featured articles for each day going back 5 years
-    """
-
-    def get_urls(self) -> List[str]:
-        urls = []
-        now = datetime.now(timezone.utc)
-
-        # 生成过去5年每月1日的"历史上的今天"页面
-        for year in range(2019, now.year + 1):
-            for month in range(1, 13):
-                if year == now.year and month > now.month:
-                    break
-                dt = datetime(year, month, 1, tzinfo=timezone.utc)
-                url = f"https://en.wikipedia.org/wiki/{dt.strftime('%B_%Y')}"
-                urls.append(url)
-
-        log.info(f"[Wikipedia Featured] 生成 {len(urls)} 个页面")
+                current = current + timedelta(days=1)
+        log.info("[Wikipedia] 生成 %d 个日期页面", len(urls))
         return urls
 
 
 # ── arXiv ─────────────────────────────────────────────────────────────────
 class ArxivSource(Source):
-    """
-    arXiv cs.AI/cs.LG/cs.CL 论文
-    使用 Atom Feed 格式，按月抓取
-    """
-
     def __init__(self, category: str):
         self.category = category
-        super().__init__(f"arXiv {category}", f"arXiv {category} papers")
+        super().__init__("arXiv " + category, "arXiv " + category + " papers")
 
     def get_urls(self) -> List[str]:
         urls = []
-        categories_map = {
-            "cs.AI": "cs.AI",
-            "cs.LG": "cs.LG",
-            "cs.CL": "cs.CL",
-        }
-        cat = categories_map.get(self.category, self.category)
-
-        # 按月生成
         start = datetime(2019, 1, 1, tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         current = datetime(start.year, start.month, 1, tzinfo=timezone.utc)
-
         while current <= now:
             year = current.year
             month = current.month
             url = (
-                f"https://export.arxiv.org/api/query?"
-                f"search_query=cat:{cat}+AND+submittedDate:[{year}{month:02d}01+TO+{year}{month:02d}31]"
-                f"&sort_by=submittedDate&sort_order=descending&max_results=50"
+                "https://export.arxiv.org/api/query?"
+                "search_query=cat:" + self.category + "+AND+submittedDate:[" + str(year) + "%02d01+TO+" + str(year) + "%02d31]&sort_by=submittedDate&sort_order=descending&max_results=50"
             )
             urls.append(url)
-
             if month == 12:
                 current = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
             else:
                 current = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-
-        log.info(f"[arXiv {cat}] 生成 {len(urls)} 个月度查询URL")
+        log.info("[arXiv %s] 生成 %d 个月度查询URL", self.category, len(urls))
         return urls
 
 
-# ── 重要 AI 公司官方博客 ─────────────────────────────────────────────────
+# ── Tech Blog ─────────────────────────────────────────────────────────────
 class TechBlogSource(Source):
-    """主要 AI 公司官方博客列表页"""
-
     def __init__(self):
         super().__init__("Tech Blogs", "AI company official blogs")
 
@@ -209,10 +174,8 @@ class TechBlogSource(Source):
         ]
 
 
-# ── 权威科技媒体 ──────────────────────────────────────────────────────────
+# ── Tech Media ──────────────────────────────────────────────────────────
 class TechMediaSource(Source):
-    """科技媒体 AI 相关页面"""
-
     def __init__(self):
         super().__init__("Tech Media", "Technology media AI coverage")
 
@@ -226,7 +189,7 @@ class TechMediaSource(Source):
         ]
 
 
-# ── 全部数据源清单 ────────────────────────────────────────────────────────
+# ── 数据源清单 ───────────────────────────────────────────────────────────
 def get_all_sources() -> List[Source]:
     return [
         WikipediaOnThisDay("Wikipedia On-This-Day", "Wikipedia 历史今日事件 2019-至今"),
@@ -238,18 +201,17 @@ def get_all_sources() -> List[Source]:
     ]
 
 
-# ── 回填单个数据源 ───────────────────────────────────────────────────────
+# ── 回填单个数据源 ─────────────────────────────────────────────────────
 def backfill_source(source: Source, force: bool = False):
     progress = load_progress()
-
     if source.name in progress.get("completed_sources", []) and not force:
-        log.info(f"[{source.name}] 已完成，跳过 (用 --force 强制重跑)")
+        log.info("[%s] 已完成，跳过 (用 --force 强制重跑)", source.name)
         return
 
-    log.info(f"[{source.name}] 开始: {source.description}")
+    log.info("[%s] 开始: %s", source.name, source.description)
     urls = source.get_urls()
     total = len(urls)
-    log.info(f"[{source.name}] 共 {total} 个 URL")
+    log.info("[%s] 共 %d 个 URL", source.name, total)
 
     pushed = skipped = 0
     batch = []
@@ -266,7 +228,7 @@ def backfill_source(source: Source, force: bool = False):
                 push_task(u)
                 time.sleep(0.3)
             pushed += len(batch)
-            log.info(f"[{source.name}] {pushed}/{total} 推送, {skipped} 跳过")
+            log.info("[%s] %d/%d 推送, %d 跳过", source.name, pushed, total, skipped)
             batch = []
             time.sleep(DELAY_BETWEEN_BATCHES)
 
@@ -278,7 +240,7 @@ def backfill_source(source: Source, force: bool = False):
     if batch:
         time.sleep(DELAY_BETWEEN_BATCHES)
 
-    log.info(f"[{source.name}] 完成: {pushed} 推送, {skipped} 跳过")
+    log.info("[%s] 完成: %d 推送, %d 跳过", source.name, pushed, skipped)
 
     progress = load_progress()
     completed = progress.get("completed_sources", [])
@@ -300,16 +262,16 @@ def run(sources=None, force=False, reset=False):
     if sources:
         targets = [s for s in all_sources if s.name in sources]
         if not targets:
-            log.error(f"未知数据源: {sources}")
-            log.info(f"可用: {[s.name for s in all_sources]}")
+            log.error("未知数据源: %s", sources)
+            log.info("可用: %s", [s.name for s in all_sources])
             return
     else:
         targets = all_sources
 
     log.info("=" * 60)
-    log.info(f"历史回填启动")
-    log.info(f"数据源: {[s.name for s in targets]}")
-    log.info(f"日期门槛: 2019-01-01")
+    log.info("历史回填启动")
+    log.info("数据源: %s", [s.name for s in targets])
+    log.info("日期门槛: 2019-01-01")
     log.info("=" * 60)
 
     for source in targets:
@@ -319,7 +281,7 @@ def run(sources=None, force=False, reset=False):
             log.warning("中断信号，保存进度")
             break
         except Exception as e:
-            log.error(f"[{source.name}] 错误: {e}", exc_info=True)
+            log.error("[%s] 错误: %s", source.name, e, exc_info=True)
             continue
 
     log.info("回填完成!")
