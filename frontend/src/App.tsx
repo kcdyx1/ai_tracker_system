@@ -17,6 +17,21 @@ interface PaperItem { id: string; title: string; abstract: string; authors: stri
 interface RepositoryItem { id: string; name: string; full_name: string; description: string; stars: number; forks: number; language: string; topics: string; owner: string; html_url: string; trending_date: string; }
 
 // ============================================================================
+// UTC时间格式化工具函数
+// ============================================================================
+function formatUTC(isoStr: string): string {
+  if (!isoStr) return '-'
+  try {
+    const d = new Date(isoStr)
+    if (isNaN(d.getTime())) return isoStr.substring(0, 19)
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`
+  } catch {
+    return isoStr.substring(0, 19)
+  }
+}
+
+// ============================================================================
 // 组件 1: 🎛️ 指挥中心 (Ops Center) - 带多模态情报接收舱版
 // ============================================================================
 const OpsCenter = () => {
@@ -148,7 +163,7 @@ const OpsCenter = () => {
       <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl overflow-hidden">
         <div className="px-6 py-5 border-b border-slate-700/50 flex justify-between items-center bg-slate-800/20"><h3 className="text-lg font-semibold flex items-center text-slate-200"><Layers className="w-5 h-5 mr-2 text-teal-400" /> V8 并发解析引擎列车</h3><span className="flex items-center text-xs text-slate-400 bg-slate-950/50 px-3 py-1 rounded-full border border-slate-700"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping mr-2"></span>实时同步中</span></div>
         <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="text-xs text-slate-400 uppercase bg-slate-900/50 border-b border-slate-800"><tr><th className="px-6 py-4">任务ID</th><th className="px-6 py-4">目标 URL / 文档</th><th className="px-6 py-4">状态</th><th className="px-6 py-4">异常信息</th><th className="px-6 py-4">入列时间</th></tr></thead><tbody className="divide-y divide-slate-800/50">
-          {tasks.map((task) => (<tr key={task.id} className="hover:bg-slate-800/30 transition-colors"><td className="px-6 py-4 font-mono text-slate-500">#{task.id}</td><td className="px-6 py-4 text-slate-300 truncate max-w-[200px] xl:max-w-xs">{task.url.replace('file://', '📄 ').replace('https://', '🔗 ')}</td><td className="px-6 py-4"><StatusBadge status={task.status} /></td><td className="px-6 py-4 text-rose-400/80 truncate max-w-xs" title={task.error_message || ''}>{task.error_message || '-'}</td><td className="px-6 py-4 text-slate-500 font-mono">{new Date(task.created_at).toLocaleString()}</td></tr>))}
+          {tasks.map((task) => (<tr key={task.id} className="hover:bg-slate-800/30 transition-colors"><td className="px-6 py-4 font-mono text-slate-500">#{task.id}</td><td className="px-6 py-4 text-slate-300 truncate max-w-[200px] xl:max-w-xs">{task.url.replace('file://', '📄 ').replace('https://', '🔗 ')}</td><td className="px-6 py-4"><StatusBadge status={task.status} /></td><td className="px-6 py-4 text-rose-400/80 truncate max-w-xs" title={task.error_message || ''}>{task.error_message || '-'}</td><td className="px-6 py-4 text-slate-500 font-mono">{formatUTC(task.created_at)}</td></tr>))}
           {tasks.length === 0 && !loading && <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">队列空闲中，请在上方输入链接或拖拽文档投喂情报...</td></tr>}
         </tbody></table></div>
       </div>
