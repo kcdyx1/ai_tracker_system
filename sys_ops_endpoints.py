@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 LOG_FILES = {
     "celery_worker": "/tmp/celery_worker.log",
+    "celery_worker2": "/tmp/celery_worker2.log",
     "feeder": "/home/kangchen/.openclaw/workspace/ai_tracker_system/feeder.log",
     "reporter": "/home/kangchen/.openclaw/workspace/ai_tracker_system/reporter.log",
     "server": "/home/kangchen/.openclaw/workspace/ai_tracker_system/server.log",
@@ -15,7 +16,6 @@ LOG_FILES = {
 SYSTEMD_SERVICES = {
     "ai-celery": "ai-celery.service",
     "ai-server": "ai-server.service",
-    "ai-mcp": "ai-mcp.service",
     "rsshub": "docker-rsshub.service",
 }
 
@@ -24,13 +24,34 @@ PROJECT_DIR = "/home/kangchen/.openclaw/workspace/ai_tracker_system"
 def register_sys_ops_endpoints(app):
     @app.get("/api/logs")
     async def get_logs(log_name: str = "celery_worker", lines: int = 100):
+        # journalctl-based logs (systemd services)
+        if log_name in SYSTEMD_SERVICES:
+            svc = SYSTEMD_SERVICES[log_name]
+            try:
+                result = subprocess.run(
+                    ["journalctl", "-u", svc, "-n", str(lines), "--no-pager", "--no-full"],
+                    capture_output=True, text=True, timeout=15
+                )
+                raw_lines = result.stdout.splitlines()
+                return {
+                    "log_name": log_name,
+                    "lines": [line.rstrip() for line in raw_lines],
+                    "total_lines": len(raw_lines),
+                    "error": None
+                }
+            except subprocess.TimeoutExpired:
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "error": "journalctl timeout"}
+            except Exception as e:
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "error": str(e)}
+
+        # file-based logs
         log_path = LOG_FILES.get(log_name)
         if not log_path:
             raise HTTPException(status_code=400, detail=f"Unknown log: {log_name}")
         try:
             if not Path(log_path).exists():
                 return {"log_name": log_name, "lines": [], "total_lines": 0, "error": None}
-            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
             total_lines = len(all_lines)
             recent_lines = all_lines[-lines:] if lines > 0 else all_lines
@@ -50,6 +71,8 @@ def register_sys_ops_endpoints(app):
             exists = Path(path).exists()
             size = Path(path).stat().st_size if exists else 0
             available[name] = {"exists": exists, "size": size, "path": path}
+        for name, svc in SYSTEMD_SERVICES.items():
+            available[name] = {"exists": True, "size": 0, "path": f"journalctl -u {svc}"}
         return available
 
     @app.post("/api/service/control")
@@ -110,7 +133,7 @@ def register_sys_ops_endpoints(app):
                 ["pgrep", "-f", "celery.*worker.celery_app"],
                 capture_output=True, text=True, timeout=5
             )
-            pids = [p for p in check.stdout.strip().split(chr(10)) if p]
+            pids = [p for p in check.stdout.strip().split("\n") if p]
             return {
                 "success": len(pids) > 0,
                 "action": "restart",
@@ -129,7 +152,7 @@ def register_sys_ops_endpoints(app):
                 ["pgrep", "-f", "celery.*worker.celery_app"],
                 capture_output=True, text=True, timeout=5
             )
-            pids_before = [p for p in check.stdout.strip().split(chr(10)) if p]
+            pids_before = [p for p in check.stdout.strip().split("\n") if p]
             subprocess.Popen(
                 ["./venv/bin/python", "-m", "celery", "-A", "worker.celery_app", "worker",
                  "--loglevel=info"],
@@ -142,7 +165,7 @@ def register_sys_ops_endpoints(app):
                 ["pgrep", "-f", "celery.*worker.celery_app"],
                 capture_output=True, text=True, timeout=5
             )
-            pids_after = [p for p in check.stdout.strip().split(chr(10)) if p]
+            pids_after = [p for p in check.stdout.strip().split("\n") if p]
             return {
                 "success": len(pids_after) > len(pids_before),
                 "action": "start",
@@ -180,3 +203,8 @@ def register_sys_ops_endpoints(app):
             return {"success": True, "action": "started", "pid": proc.pid}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/health")
+    async def get_health():
+        from health_check import get_full_health_report
+        return get_full_health_report()
