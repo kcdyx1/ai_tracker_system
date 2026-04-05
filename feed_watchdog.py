@@ -66,7 +66,7 @@ def load_feeds():
     """从 feeds_v2.json 加载所有 feed 元数据"""
     data = load_json(FEEDS_V2_FILE, {})
     feeds = {}
-    tier_order = ["core", "standard", "extended", "local"]
+    tier_order = ["core", "standard", "extended", "wechat", "local"]
     for tier in tier_order:
         tier_data = data.get("tiers", {}).get(tier, {})
         for feed in tier_data.get("feeds", []):
