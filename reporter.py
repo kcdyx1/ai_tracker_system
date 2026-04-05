@@ -78,7 +78,7 @@ def get_recent_intelligence(days):
         FROM events
         WHERE published_date >= ?
           AND published_date <= datetime('now', '+7 days')
-          AND published_date >= '2020-01-01'
+          AND published_date >= '2019-01-01'
         ORDER BY
           CASE WHEN source_url IS NOT NULL AND source_url != '' THEN 0 ELSE 1 END,
           published_date DESC

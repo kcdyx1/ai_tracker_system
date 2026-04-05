@@ -25,7 +25,7 @@ from datetime import datetime
 from fastapi import Request, HTTPException
 # ... 其他 import
 from database import (
-    init_db, push_task, get_pending_task, update_task_status,
+    init_db, push_task, _format_dt, get_pending_task, update_task_status,
     save_extraction_result, get_connection, get_recent_events, query_all_entities,
     query_entity_by_id, get_events_for_entity
 )
@@ -121,7 +121,7 @@ async def health_check():
     from datetime import datetime
     return {
         "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _format_dt(datetime.now(timezone.utc)),
         "service": "AI Tracker System"
     }
 
@@ -540,8 +540,8 @@ async def get_trending_entities(limit: int = 10):
         conn = get_connection()
         cursor = conn.cursor()
 
-        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-        month_ago = (datetime.now() - timedelta(days=30)).isoformat()
+        week_ago = _format_dt(datetime.now(timezone.utc) - timedelta(days=7))
+        month_ago = _format_dt(datetime.now(timezone.utc) - timedelta(days=30))
 
         result = {"period_days": 7}
 
@@ -782,8 +782,8 @@ async def get_entity_insights(entity_id: str):
         if not entity:
             raise HTTPException(status_code=404, detail="实体不存在")
 
-        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-        month_ago = (datetime.now() - timedelta(days=30)).isoformat()
+        week_ago = _format_dt(datetime.now(timezone.utc) - timedelta(days=7))
+        month_ago = _format_dt(datetime.now(timezone.utc) - timedelta(days=30))
 
         # 近7天事件数
         cursor.execute("""
@@ -885,7 +885,7 @@ async def get_task_stats():
     finally:
         conn.close()
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 @app.post("/api/ingest")
 async def ingest_url(request: Request):
@@ -939,7 +939,7 @@ async def upload_document(file: UploadFile = File(...)):
         cursor.execute("""
             INSERT INTO task_queue (url, status, created_at) 
             VALUES (?, 'pending', ?)
-        """, (file_url, datetime.now().isoformat()))
+        """, (file_url, _format_dt(datetime.now(timezone.utc))))
         task_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -1041,7 +1041,7 @@ async def export_data(format: str = "json", entity_type: str = None, days: int =
         conn = get_connection()
         cursor = conn.cursor()
 
-        time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
+        time_threshold = _format_dt(datetime.now(timezone.utc) - timedelta(days=days))
 
         if format == "csv":
             output = io.StringIO()
@@ -1071,7 +1071,7 @@ async def export_data(format: str = "json", entity_type: str = None, days: int =
                 headers={"Content-Disposition": f"attachment; filename=ai_tracker_export_{datetime.now().strftime('%Y%m%d')}.csv"}
             )
         else:
-            result = {"export_time": datetime.now().isoformat(), "entities": [], "relationships": [], "events": []}
+            result = {"export_time": _format_dt(datetime.now(timezone.utc)), "entities": [], "relationships": [], "events": []}
 
             if entity_type:
                 cursor.execute("SELECT id, type, name, description, created_at, aliases_json, attributes_json FROM entities WHERE type = ?", (entity_type,))

@@ -313,7 +313,7 @@ def run_auto_feeder():
 
         # 修复：在所有URL处理完成后再更新时间戳
         # 避免解析耗时导致"未来"的文章被错误过滤
-        new_metadata[feed_url] = datetime.utcnow().isoformat()
+        new_metadata[feed_url] = datetime.now(timezone.utc).isoformat()
 
     # 保存URL历史和元数据
     history.save()

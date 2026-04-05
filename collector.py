@@ -15,7 +15,7 @@ import time
 import random
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
@@ -121,7 +121,7 @@ def save_paper(paper_data: dict) -> bool:
             paper_data.get('source', 'arxiv'),
             paper_data.get('source_url'),
             json.dumps(paper_data.get('raw_metadata', {})),
-            datetime.now().isoformat()
+            datetime.now(timezone.utc).isoformat()
         ))
         conn.commit()
         return True
@@ -170,7 +170,7 @@ def save_repository(repo_data: dict) -> bool:
             repo_data.get('source', 'github_trending'),
             repo_data.get('trending_date'),
             json.dumps(repo_data.get('raw_metadata', {})),
-            datetime.now().isoformat()
+            datetime.now(timezone.utc).isoformat()
         ))
         conn.commit()
         return True
@@ -468,7 +468,7 @@ class GitHubTrendingCollector(BaseCollector):
         logger.info(f"  🐙 抓取 GitHub Trending: {', '.join(languages)}")
 
         all_items = []
-        trending_date = datetime.now().date().isoformat()
+        trending_date = datetime.now(timezone.utc).date().isoformat()
 
         for language in languages:
             items = self._collect_language(language, trending_date)
@@ -668,7 +668,7 @@ class HackerNewsCollector(BaseCollector):
                         summary=story.get("text", "")[:300],
                         source="Hacker News",
                         source_type="hn",
-                        published_at=datetime.fromtimestamp(story.get("time", 0)).isoformat() if story.get("time") else None,
+                        published_at=datetime.fromtimestamp(story.get("time", 0), tz=timezone.utc).isoformat() if story.get("time") else None,
                         author=story.get("by", ""),
                         tags=["HN", "科技", "创业"],
                         quality=4,
@@ -821,7 +821,7 @@ class RedditCollector(BaseCollector):
                     summary=post_data.get("selftext", "")[:300],
                     source=f"Reddit r/{subreddit}",
                     source_type="reddit",
-                    published_at=datetime.fromtimestamp(post_data.get("created_utc", 0)).isoformat(),
+                    published_at=datetime.fromtimestamp(post_data.get("created_utc", 0), tz=timezone.utc).isoformat(),
                     author=post_data.get("author", ""),
                     tags=["社区", "讨论", "Reddit"],
                     quality=4,

@@ -16,12 +16,24 @@ def _format_dt(dt):
     """Normalize datetime to ISO string with UTC timezone"""
     if dt is None:
         return None
-    from datetime import timezone
+    from datetime import timezone, datetime
+    if isinstance(dt, str):
+        s = dt.strip()
+        try:
+            if s.endswith('+00:00'):
+                dt = datetime.fromisoformat(s)
+            else:
+                dt = datetime.fromisoformat(s.replace('+00:00', ''))
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.isoformat()
+        except ValueError:
+            return dt
     if hasattr(dt, 'tzinfo') and dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     elif hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat()
+
 
 
 
