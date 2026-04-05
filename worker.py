@@ -103,6 +103,29 @@ def _build_in_clause(ids: list) -> tuple[str, list]:
 
 
 @celery_app.task
+def reset_stuck_tasks():
+    """每10分钟重置卡住的 processing 任务（超过30分钟未完成视为卡住）"""
+    print(f"\n🔧 [Stuck任务清理] 开始扫描卡住的任务...")
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE task_queue
+            SET status = 'pending', error_message = 'auto-reset: stuck in processing > 30min'
+            WHERE status = 'processing'
+            AND created_at < datetime('now', '-30 minutes')
+        """)
+        conn.commit()
+        count = cursor.rowcount
+        if count > 0:
+            print(f"🔧 [Stuck任务清理] 重置了 {count} 个卡住的任务")
+        else:
+            print(f"🔧 [Stuck任务清理] 没有发现卡住的任务")
+    finally:
+        conn.close()
+
+
+@celery_app.task
 def deduplicate_entities():
     """每天定时执行实体去重合并"""
     print(f"\n🧹 [去重任务] 开始执行实体去重...")

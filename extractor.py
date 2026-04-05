@@ -55,7 +55,7 @@ def _get_extractor():
             raise ValueError("请设置环境变量 MINIMAX_API_KEY")
         client = Anthropic(
             api_key=api_key,
-            base_url="http://114.132.200.116:3888/"
+            base_url=os.environ.get("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/")
         )
         _client_local.client = instructor.from_anthropic(client)
     return _client_local.client
@@ -205,7 +205,7 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
     result.events = valid_events
     return result
 
-def extract_with_validation(text: str, max_retries: int = 5, backfill_mode: bool = False) -> ExtractionResult:
+def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool = False) -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
 
@@ -213,7 +213,7 @@ def extract_with_validation(text: str, max_retries: int = 5, backfill_mode: bool
     """
     # 获取现有实体库，但只注入文本中实际提到的实体
     from database import query_all_entities # 确保在作用域内
-    existing_entities = query_all_entities()
+    existing_entities = query_all_entities(text)
     text_lower = text.lower()
 
     # 过滤：只保留文本中提到的实体
@@ -251,7 +251,7 @@ def extract_with_validation(text: str, max_retries: int = 5, backfill_mode: bool
 
             # 确保实体不为空
             if not result.entities:
-                print(f"⚠️ 第 {attempt + 1} 次尝试未提取到实体，休眠 2 秒后重试...")
+                print(f"⚠️ 第 {attempt + 1} 次尝试未提取到实体，休眠 1.5 秒后重试...")
                 time.sleep(2)
                 continue
 

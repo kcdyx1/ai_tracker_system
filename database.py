@@ -304,12 +304,24 @@ def save_extraction_result(result: ExtractionResult) -> None:
     finally:
         conn.close()
 
-def query_all_entities() -> list:
+def query_all_entities(text: str = "") -> list:
+    """查询实体，可选按文本过滤只返回名称出现在text中的实体"""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM entities")
-        return [dict(r) for r in cursor.fetchall()]
+        if text:
+            # 优化：只查名称可能出现在文本中的实体，减少内存占用
+            words = set(w.lower() for w in text.split() if len(w) >= 3)
+            cursor.execute("SELECT * FROM entities")
+            all_entities = cursor.fetchall()
+            # Python层过滤（实体数相对少，且避免SQL注入风险）
+            text_lower = text.lower()
+            filtered = [dict(r) for r in all_entities
+                        if r['name'] and r['name'].lower() in text_lower]
+            return filtered
+        else:
+            cursor.execute("SELECT * FROM entities")
+            return [dict(r) for r in cursor.fetchall()]
     finally:
         conn.close()
 

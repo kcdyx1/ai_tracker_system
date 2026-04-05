@@ -38,7 +38,7 @@ def fetch_clean_markdown(url: str) -> str:
         response = requests.get(
             jina_url,
             headers=DEFAULT_HEADERS,
-            timeout=15
+            timeout=(5, 10)
         )
         
         if response.status_code == 200:
