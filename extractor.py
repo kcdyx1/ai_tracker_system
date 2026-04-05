@@ -113,7 +113,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
-        model="MiniMax-M2",
+        model="MiniMax-M2.7-highspeed",
         max_tokens=8000,
         system=system_prompt,
         messages=[
@@ -129,7 +129,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 
 
 
-def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
+def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = False) -> ExtractionResult:
     """
     提取质量门禁：过滤低质量、无关、日期异常的事件
     """
@@ -146,8 +146,9 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
         "acquisition", "merger", "ipo", "public", "launch", "release"
     ]
 
-    # 日期边界（统一使用 UTC，避免时区比较错误）
-    min_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    # 日期边界（统一使用 UTC）
+    # 日常跟踪和回填都使用 2019-01-01 门槛，2019年之前的事件无AI跟踪价值
+    min_date = datetime(2019, 1, 1, tzinfo=timezone.utc)  # 日常:2019, 回填:2019
     max_date = datetime.now(timezone.utc) + timedelta(days=7)
 
     valid_events = []
@@ -204,7 +205,7 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
     result.events = valid_events
     return result
 
-def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult:
+def extract_with_validation(text: str, max_retries: int = 5, backfill_mode: bool = False) -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
 
@@ -260,7 +261,7 @@ def extract_with_validation(text: str, max_retries: int = 5) -> ExtractionResult
             time.sleep(cooldown)
 
             # 🛡️ 质量门禁：过滤低质量、异常日期、无关事件
-            result = validate_extraction_result(result)
+            result = validate_extraction_result(result, backfill_mode=backfill_mode)
 
             return result
 

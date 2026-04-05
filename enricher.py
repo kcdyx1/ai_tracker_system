@@ -68,7 +68,7 @@ def fuse_intelligence(entity_name: str, entity_type: str, search_context: str) -
     print(f"  🧠 正在让 MiniMax 提炼【{entity_type}】专属结构化 JSON...")
 
     msg = client.messages.create(
-        model="MiniMax-M2.5", max_tokens=2000, system=sys_prompt,
+        model="MiniMax-M2.7-highspeed", max_tokens=2000, system=sys_prompt,
         messages=[{"role": "user", "content": f"搜索结果如下：\n\n{search_context}"}]
     )
 
