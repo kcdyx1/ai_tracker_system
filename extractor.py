@@ -168,6 +168,19 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
             print(f"过滤日期解析失败的事件: {event.title[:30]}... 错误: {e}")
             continue
 
+        # 1b. published_date validation (prevent LLM from using historical dates)
+        try:
+            pub_date = event.published_date
+            if hasattr(pub_date, 'year'):
+                pd = pub_date
+                if pd.tzinfo is None:
+                    pd = pd.replace(tzinfo=timezone.utc)
+                if pd < min_date:
+                    print(f"过滤异常报道日期事件: {event.title[:30]}... (报道日期: {pd.year})")
+                    continue
+        except (ValueError, TypeError, AttributeError):
+            pass
+
         # 2. 相关性校验 - 检查标题和摘要是否包含AI相关关键词
         text_to_check = (event.title + " " + event.summary).lower()
         is_relevant = any(kw.lower() in text_to_check for kw in ai_keywords)

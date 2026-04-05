@@ -102,12 +102,12 @@ def generate_report_content(events, report_type, report_title):
     # 🚀 核心改动：从外部集中库引入提示词，并动态注入标题
     system_prompt = REPORTER_SYSTEM_PROMPT.format(report_title=report_title)
 
-    log(f"🧠 正在呼叫 MiniMax-M2 引擎进行深度战略推演 ({report_type})...")
+    log(f"🧠 正在呼叫 MiniMax-M2.7-highspeed 引擎进行深度战略推演 ({report_type})...")
 
     try:
         client = _get_anthropic_client()
         message = client.messages.create(
-            model="MiniMax-M2",
+            model="MiniMax-M2.7-highspeed",
             max_tokens=4000,
             system=system_prompt,
             messages=[{"role": "user", "content": [{"type": "text", "text": f"请分析以下情报并严格按规范输出高管内参：\n\n{context}"}]}]
@@ -146,7 +146,7 @@ def send_feishu_card(markdown_content, title_text):
             "elements": [
                 {"tag": "markdown", "content": markdown_content},
                 {"tag": "hr"},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"🤖 MiniMax-M2 战略参谋驱动 | 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"}]}
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"🤖 MiniMax-M2.7-highspeed 战略参谋驱动 | 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"}]}
             ]
         }
     }

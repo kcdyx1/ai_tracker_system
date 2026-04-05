@@ -12,6 +12,18 @@ from typing import Optional
 from ontology import ExtractionResult, Entity, Event, Relationship
 
 DB_PATH = Path(__file__).parent / "ai_tracker.db"
+def _format_dt(dt):
+    """Normalize datetime to ISO string with UTC timezone"""
+    if dt is None:
+        return None
+    from datetime import timezone
+    if hasattr(dt, 'tzinfo') and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    elif hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat()
+
+
 
 def get_connection() -> sqlite3.Connection:
     # 延长超时至 60 秒，保证极端负载不报错
@@ -243,18 +255,25 @@ def save_extraction_result(result: ExtractionResult) -> None:
                 INSERT OR REPLACE INTO entities (id, type, name, aliases_json, description, created_at, attributes_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (use_id, entity_type, entity.name, json.dumps(entity.aliases), entity_desc,
-                  entity.created_at.isoformat() if isinstance(entity.created_at, datetime) else str(entity.created_at), json.dumps(attributes, ensure_ascii=False)))
+                  _format_dt(entity.created_at), json.dumps(attributes, ensure_ascii=False)))
 
         # ── 写入 events：把实体ID映射到规范ID ──────────────────────────────
+        # 去重：同一标题+日期的事件跳过（防止同一URL重复处理产生重复事件）
+        cursor.execute("SELECT title, date FROM events")
+        existing_event_keys = set((row[0], row[1]) for row in cursor.fetchall())
+
         for event in result.events:
+            event_key = (event.title, _format_dt(event.date))
+            if event_key in existing_event_keys:
+                continue
             canonical_ids = [id_mapping.get(eid, eid) for eid in event.involved_entity_ids]
             cursor.execute("""
                 INSERT OR REPLACE INTO events (id, title, date, published_date, involved_entities_json, summary, source_url, created_at, risk_level, sentiment)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (event.id, event.title, event.date.isoformat() if isinstance(event.date, datetime) else str(event.date),
-                  event.published_date.isoformat() if isinstance(event.published_date, datetime) else str(event.published_date),
+            """, (event.id, event.title, _format_dt(event.date),
+                  _format_dt(event.published_date),
                   json.dumps(canonical_ids), event.summary, event.source_url,
-                  event.created_at.isoformat() if isinstance(event.created_at, datetime) else str(event.created_at),
+                  _format_dt(event.created_at),
                   getattr(event, 'risk_level', None), getattr(event, 'sentiment', None)))
 
         # ── 写入 relationships：把实体ID映射到规范ID ───────────────────────
@@ -266,8 +285,8 @@ def save_extraction_result(result: ExtractionResult) -> None:
                 INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type, start_date, end_date, evidence)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (src, tgt, rtype,
-                  rel.start_date.isoformat() if rel.start_date and isinstance(rel.start_date, datetime) else (rel.start_date if rel.start_date else None),
-                  rel.end_date.isoformat() if rel.end_date and isinstance(rel.end_date, datetime) else (rel.end_date if rel.end_date else None),
+                  _format_dt(rel.start_date),
+                  _format_dt(rel.end_date),
                   getattr(rel, 'evidence', None)))
         conn.commit()
     finally:
@@ -297,7 +316,7 @@ def get_recent_events(days: int = 7) -> list:
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        cutoff_date = _format_dt(datetime.now() - timedelta(days=days))
         cursor.execute("SELECT * FROM events WHERE published_date >= ? ORDER BY published_date DESC", (cutoff_date,))
         return [dict(r) for r in cursor.fetchall()]
     finally:
@@ -310,12 +329,12 @@ def push_task(url: str) -> bool:
         cursor.execute("SELECT status FROM task_queue WHERE url = ?", (url,))
         row = cursor.fetchone()
         if row is None:
-            cursor.execute("INSERT INTO task_queue (url, status, created_at) VALUES (?, 'pending', ?)", (url, datetime.now().isoformat()))
+            cursor.execute("INSERT INTO task_queue (url, status, created_at) VALUES (?, 'pending', ?)", (url, _format_dt(datetime.now())))
             conn.commit()
             return True
         else:
             if row[0] in ('failed', 'completed'):
-                cursor.execute("UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = ? WHERE url = ?", (datetime.now().isoformat(), url))
+                cursor.execute("UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = ? WHERE url = ?", (_format_dt(datetime.now()), url))
                 conn.commit()
                 return True
             return False
