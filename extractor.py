@@ -186,13 +186,8 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
         text_to_check = (event.title + " " + event.summary).lower()
         is_relevant = any(kw.lower() in text_to_check for kw in ai_keywords)
         if not is_relevant:
-            # 再检查实体类型 - 如果有关联的公司/产品/技术实体，也认为是相关的
-            if event.involved_entity_ids:
-                # 有关联实体，保留
-                pass
-            else:
-                print(f"⚠️ 过滤低相关事件: {event.title[:30]}...")
-                continue
+            print(f"⚠️ 过滤低相关事件: {event.title[:30]}...")
+            continue
 
         # 3. 来源校验 - 有来源URL的事件优先保留
         # 这可以作为后续排序依据，这里先不过滤

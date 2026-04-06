@@ -37,34 +37,244 @@ API_URL = os.environ.get("API_INGEST_URL", "http://127.0.0.1:8000/api/ingest")
 # 历史记录最大容量（防止内存膨胀）
 MAX_HISTORY_SIZE = int(os.environ.get("FEEDER_HISTORY_MAX_SIZE", "100000"))
 
-# 高价值情报过滤网 (维持强力配置)
-AI_KEYWORDS = [
-    "llm", "大模型", "vlm", "多模态", "moe", "混合专家", "slm", "端侧模型",
-    "transformer", "diffusion", "dit", "agi", "aigc", "大语言模型", "具身智能",
-    "openai", "chatgpt", "sora", "gpt-4", "o1", "o3", "anthropic", "claude",
-    "google", "gemini", "gemma", "meta", "llama", "deepseek", "深度求索",
-    "moonshot", "kimi", "月之暗面", "minimax", "稀宇科技", "zhipu", "智谱",
-    "qwen", "通义千问", "baichuan", "百川", "mistral", "xai", "grok", "midjourney", "perplexity",
-    "data", "数据", "rag", "graphrag", "检索增强", "知识图谱", "knowledge graph",
-    "neo4j", "图数据库", "chroma", "milvus", "qdrant", "向量数据库", "vector database",
-    "synthetic data", "合成数据", "数据治理", "数据资产", "数据估值", "unstructured data",
-    "非结构化数据", "数据清洗", "etl", "data pipeline",
-    "agent", "智能体", "multi-agent", "多智能体", "ai-native", "ai原生",
-    "langchain", "llamaindex", "autogen", "crewai", "dify", "coze", "openclaw",
-    "mcp", "model context protocol", "vibe coding", "ai coding", "cursor",
-    "gpu", "tpu", "npu", "nvidia", "英伟达", "h100", "b200", "gb200", "cuda", "tensorrt", "groq",
-    "算力", "数据中心", "液冷", "边缘计算", "edge computing",
-    "open source", "开源", "huggingface", "github", "local deployment", "本地部署", "算力集群",
-    "parameters", "参数量", "context window", "上下文",
-    "fine-tuning", "微调", "rlhf", "dpo", "lora", "量化", "quantization", "prompt", "提示词", "数据集", "数据"
-]
+# ═══════════════════════════════════════════════════════════════
+# AI 关键词（中英文，双主线：AI + 数据基础设施）
+# ═══════════════════════════════════════════════════════════════
+AI_KEYWORDS = {
+    "llm", "llms", "大模型", "语言模型", "基础模型", "foundation model",
+    "vlm", "vision language model", "多模态", "multimodal",
+    "moe", "mixture of experts", "混合专家", "slm", "端侧模型",
+    "端侧ai", "edge ai", "模型蒸馏", "model compression",
+    "transformer", "diffusion", "dit", "gans", "vae",
+    "rl", "reinforcement learning", "强化学习",
+    "rlhf", "dpo", "ppo", "reward model",
+    "sft", "supervised fine-tuning", "指令微调", "instruction tuning",
+    "cot", "chain of thought", "思维链", "reasoning model",
+    "agi", "artificial general intelligence", "通用人工智能",
+    "aigc", "生成式ai", "generative ai",
+    "copilot", "ai assistant", "code assistant",
+    "agent", "智能体", "ai agent", "multi-agent", "multiagent",
+    "rag", "retrieval augmented", "检索增强", "graphrag",
+    "knowledge graph", "知识图谱",
+    "embedding", "向量化", "vector db", "vector search",
+    "fine-tuning", "微调", "lora", "qlora", "adapter",
+    "涌现", "emergent", "scaling law",
+    "对齐", "alignment", "constitutional ai",
+    "AI安全", "AI safety", "AI alignment",
+    "gpt", "gpt-4", "gpt-4o", "o1", "o3", "chatgpt",
+    "dall-e", "sora", "whisper", "openai",
+    "claude", "claude-3", "claude-4", "sonnet", "anthropic",
+    "gemini", "gemma", "deepmind", "google ai",
+    "llama", "llama-2", "llama-3", "llama-4", "meta-llama",
+    "deepseek", "深度求索", "deepseek r1",
+    "qwen", "qwen-turbo", "qwen-plus", "通义千问",
+    "baichuan", "百川", "baichuan-2", "baichuan3",
+    "kimi", "moonshot", "月之暗面",
+    "minimax", "稀宇科技",
+    "zhipu", "智谱ai", "chatglm", "glm-4",
+    "yi", "零一", "01ai", "step", "step-2", "step-3",
+    "jina", "bge", "bce", "bge embeddings", "m3e",
+    "rwkv",
+    "openai", "anthropic", "deepmind", "mistral ai", "cohere",
+    "stability ai", "midjourney", "runway", "runwayml",
+    "huggingface", "langchain", "llamaindex", "dify", "coze",
+    "nvidia", "英伟达", "amd", "intel ai", "tpu", "gpu",
+    "databricks", "snowflake", "zilliz", "qdrant", "chroma",
+    "pinecone", "weaviate", "milvus", "clickhouse",
+    "阿里云", "华为云ModelArts", "modelarts",
+    "腾讯云", "tencent cloud", "tencent ai lab",
+    "字节AI", "字节火山", "火山引擎", "doubao",
+    "百度AI", "文心", "ernie", "飞桨", "paddlepaddle",
+    "商汤", "sensecore", "旷视", "megvii",
+    "依图", "yitu", "云从", "cloudwalk",
+    "第四范式", "寒武纪", "cambricon",
+    "arxiv", "paper", "论文", "preprint",
+    "icml", "neurips", "nips", "iclr", "aaai", "ijcai", "kdd",
+    "cvpr", "iccv", "eccv", "acl", "emnlp", "naacl",
+    "benchmark", "pre-train", "pretrain", "post-train",
+    "scaling", "scaling law", "emergent",
+    "hallucination", "幻觉", "可解释性", "interpretability",
+    "tool use", "tool learning", "chain-of-thought",
+    "context length", "context window", "上下文窗口", "百万token",
+    "inference optimization", "推理优化", "kv cache",
+    "speculative decoding", "投点解码",
+    "quantization", "量化", "int8", "fp8", "nf4",
+    "pruning", "剪枝", "knowledge distillation", "蒸馏",
+    "mixture-of-expert", "moe", "sparse mixture",
+    "open source", "开源", "开源模型",
+    "github", "github trending", "hugging face",
+    "lora", "qlora", "lorahub",
+    "vllm", "text-generation-inference", "tgi", "llama.cpp",
+    "ollama", "localai", "local llm", "本地部署",
+    "paged attention", "attention sink",
+    "AI coding", "copilot", "cursor", "devin",
+    "AI video", "视频生成", "文生视频",
+    "AI voice", "voice cloning", "语音合成",
+    "AI图像", "text-to-image", "文生图",
+    "AI music", "AI 音乐",
+    "AI PPT", "AI presentation",
+    "AI gaming", "AI NPC",
+    "具身智能", "robotics", "embodied ai",
+    "autonomous driving", "自动驾驶",
+    "AI medical", "AI 医疗", "AI pharma", "AI 制药",
+    "AI security", "AI 安全", "adversarial attack",
+}
 
-# 现代数据栈与前沿基建白名单
-WHITELIST_DOMAINS = [
-    "arxiv.org", "huggingface.co", "openai.com", "anthropic.com", "research.google",
-    "databricks.com", "snowflake.com", "zilliz.com", "qdrant.tech", "weaviate.io",
-    "langchain.dev", "llamaindex.ai", "buttondown.email/ainews", "importai.substack.com"
-]
+DATA_KEYWORDS = {
+    "snowflake", "databricks", "spark", "apache spark",
+    "clickhouse", "starrocks", "doris", "apache doris",
+    "kafka", "confluent", "apache kafka",
+    "flink", "apache flink",
+    "iceberg", "delta lake", "apache iceberg",
+    "hudi", "apache hudi",
+    "parquet", "apache parquet", "orc file",
+    "druid", "apache druid",
+    "timescale", "influxdb", "questdb", "tdengine", "taos",
+    "mongodb", "postgresql", "postgres", "cockroachdb", "yugabyte",
+    "scylladb", "redis", "valkey", "dragonfly",
+    "neo4j", "memgraph", "planetscale", "neon",
+    "supabase", "turso", "libsql", "sqlite",
+    "weaviate", "qdrant", "chroma", "milvus", "pinecone", "lancedb", "marqo",
+    "airflow", "prefect", "mage.ai", "dagster",
+    "dbt", "data build tool", "sqlmesh",
+    "fivetran", "airbyte", "meltano", "stitch",
+    "bigquery", "redshift", "synapse",
+    "data warehouse", "数据仓库", "湖仓一体",
+    "tableau", "powerbi", "quicksight", "looker", "hex", "mode analytics", "thoughtspot",
+    "data observability", "data quality", "数据质量",
+    "monte carlo", "metaplane", "bigeye", "datafold",
+    "data integration", "etl", "elt", "数据集成",
+    "vector database", "vector store", "向量数据库",
+    "embedding", " ANN search", "近似最近邻",
+    "mlops", "dataops",
+    "feature store", "feature platform",
+    "dvc", "mlflow", "clearml", "wandb",
+    "ray", "ray distributed", "distributed training",
+    "sageMaker", "vertex ai", "azure ml",
+    "lakehouse", "data lake",
+    "real-time data", "streaming", "流式计算",
+    "change data capture", "cdc", "debezium",
+    "apache pulsar", "pulsar", "rocketmq",
+}
+
+BLOCKLIST_KEYWORDS = {
+    "枪击", "shooting", "mass shooting", "shootout",
+    "科比", "kobe", "布莱恩特",
+    "空难", "坠机", "helicopter crash",
+    "地震", "earthquake", "海啸", "tsunami",
+    "火山喷发", "volcano erupts",
+    "疫情", "COVID", "covid-19", "coronavirus", "新冠",
+    "pandemic", "流感",
+    "大选", "election", "presidential election",
+    "弹劾", "impeach",
+    "总统", "prime minister",
+    "战争", "war", "invasion", "冲突",
+    "加沙", "gaza", "乌克兰", "russia ukraine",
+    "CPI", "PCE", "通胀", "inflation", "deflation",
+    "美联储", "降息", "加息", "议息会议",
+    "黄金", "gold price", "原油", "油价", "石油",
+    "天然气",
+    "GDP", "非农", "就业率", "失业率",
+    "A股", "港股", "加密货币",
+    "世界杯", "欧洲杯", "欧冠", "NBA", "季后赛",
+    "贝克汉姆", "明星", "演唱会", "电影首映",
+    "票房", "好莱坞",
+    "海底捞", "星巴克", "瑞幸", "茅台",
+    "特斯拉", "比亚迪",
+    "房价", "房产税",
+    "清明节", "春节", "五一", "国庆",
+}
+
+STRICT_MEDIA_DOMAINS = {
+    "36kr.com", "ithome.com", "tmtpost.com", "leiphone.com",
+    "woshipm.com", "199it.com",
+    "theverge.com", "techcrunch.com", "wired.com",
+    "engadget.com", "bbc.com", "cnn.com", "reuters.com",
+    "bloomberg.com", "ft.com", "wsj.com",
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 白名单域名（高质量 AI + 数据来源，直接通过）
+# ═══════════════════════════════════════════════════════════════
+WHITELIST_DOMAINS = {
+    "arxiv.org", "openai.com", "anthropic.com", "deepmind.google",
+    "ai.google", "blog.google", "developers.google.com",
+    "huggingface.co", "huggingface.com", "meta.ai",
+    "blogs.nvidia.com", "developer.nvidia.com", "nvidia.com",
+    "aws.amazon.com", "azure.microsoft.com",
+    "microsoft.com/research", "blogs.microsoft.com",
+    "bai.com", "baidu.com", "qianwen.aliyun.com", "tongyi.aliyun.com",
+    "tencent.com", "weixin.qq.com", "qq.com",
+    "bytedance.com", "douyin.com", "feishu.cn", "larkoffice.com",
+    "x.ai", "mistral.ai", "cohere.com", "stability.ai",
+    "midjourney.com", "runwayml.com", "replicate.com",
+    "together.ai", "groq.com", "perplexity.ai",
+    "wandb.ai", "weights.gg", "clearml.ai", "mlflow.org",
+    "modal.com", "anyscale.com", "beam.cloud", "fal.ai",
+    "snowflake.com", "snowflakedb.com",
+    "databricks.com", "databricks.io", "spark.apache.org",
+    "confluent.io", "kafka.apache.org",
+    "flink.apache.org",
+    "clickhouse.com", "clickhouse.tech",
+    "starrocks.com", "starrocks.io",
+    "doris.apache.org",
+    "apache.org", "parquet.apache.org", "iceberg.apache.org",
+    "delta.io", "hudi.apache.org",
+    "airflow.apache.org", "prefect.io", "mage.ai",
+    "dbt.com", "getdbt.com", "sqlmesh.com",
+    "fivetran.com", "airbyte.com", "meltano.com", "stitchdata.com",
+    "hex.com", "ModeAnalytics", "looker.com", "thoughtspot.com",
+    "tableau.com", "powerbi.microsoft.com", "quicksight.aws",
+    "bigquery.google.com", "redshift.aws", "synapse.azure",
+    "planet-scale.com", "neon.tech", "supabase.com", "supabase.io",
+    "turso.tech", "libsql.com",
+    "mongodb.com", "atlas.mongodb.com",
+    "postgresq", "postgresql.org", "crunchydata.com",
+    "cockroachdb.com", "yugabyte.com", "scylladb.com",
+    "redis.io", "valkey.io", "dragonflydb.io",
+    "neo4j.com", "neo4j.org", "memgraph.com",
+    "singlestore.com",
+    "rockset.com", "Elastic", "elasticsearch.com",
+    "weaviate.io", "Qdrant", "qdrant.tech",
+    "chroma.ai", "Milvus", "milvus.io", "Zilliz", "zilliz.com",
+    "pinecone.io", "LanceDB", "lancedb.com", "Marqo", "marqo.ai",
+    "opensearch.org",
+    "timescale.com", "influxdata.com",
+    "questdb.com", "Tdengine", "taosdata.com",
+    "apache-druid", "imply.io",
+    "langchain.dev", "langchain.com", "dify.ai", "coze.com", "coze.cn",
+    "llamaindex.ai", "llamaindex.com", "llama.cpp",
+    "ollama.ai", "ollama.com", "localai.io", "localai.gg",
+    "vllm.ai", "pytorch.org", "jax.ai", "chainer.org",
+    "Papers With Code", "paperswithcode.com",
+    "zhipuai.cn", "zhipuai.com", "chatglm.cn", "chatglm.com",
+    "minimax.io", "minimaxi.com",
+    "kimi.moonshot.cn", "moshi.moonshot.cn",
+    "xunfei.cn", "xfyun.cn", "iflytek.com",
+    "sensetime.com", "megvii.com", "yitu.com", "deepglint.com",
+    "horizon.ai", "cambricon.com", "bitmain.com",
+    "alibaba.com", "aliyun.com",
+    "huawei.com", "huaweicloud.com",
+    "iqiyi.com", "bilibili.com",
+    "xiaomi.com", "mi.com",
+    "jd.com",
+    "360.cn", "360.com", "360ai.com",
+    "mit.edu", "stanford.edu", "berkeley.edu", "cmu.edu",
+    "ox.ac.uk", "cam.ac.uk", "ic.ac.uk", "ucl.ac.uk",
+    "mila.quebec", "mila.ca", "vectorinstitute.ai",
+    "allenai.org", "allenai-oai.github.io",
+    "bair.berkeley.edu", "crfm.stanford.edu",
+    "msra.cn", "msra.com",
+    "jiqizhixin.com", "机器之心.com", "qbitai.com", "量子位.com",
+    "leiphone.com", "ithome.com", "tmtpost.com",
+    "aibase.com", "aigc.com", "woshipm.com",
+    "36kr.com", "199it.com",
+    "garymarcus.substack.com", "importai.substack.com",
+    "substack.com", "buttondown.email",
+    "theinformation.com",
+    "news.ycombinator.com", "reddit.com/r/MachineLearning",
+    "github.com", "gitlab.com", "bitbucket.org",
+}
 
 
 class HistoryManager:
@@ -206,17 +416,47 @@ def is_after_2023(entry) -> bool:
     return True
 
 
-def is_high_value_intel(title: str, summary: str, content: str, url: str) -> bool:
-    """情报过滤器：判断是否包含核心行业价值"""
-    if any(domain in url for domain in WHITELIST_DOMAINS):
-        return True
+def _is_blocked(title, summary, content):
+    """负面关键词过滤"""
+    text = (title + " " + summary + " " + content).lower()
+    for kw in BLOCKLIST_KEYWORDS:
+        if kw.lower() in text:
+            return True
+    return False
 
-    text_to_scan = (title + " " + summary + " " + content).lower()
-    for kw in AI_KEYWORDS:
-        if kw in text_to_scan:
+
+def _count_relevant(title, summary, content):
+    """统计命中数量"""
+    text = (title + " " + summary + " " + content).lower()
+    ai_count = sum(1 for kw in AI_KEYWORDS if kw.lower() in text)
+    data_count = sum(1 for kw in DATA_KEYWORDS if kw.lower() in text)
+    return ai_count, data_count
+
+
+def is_high_value_intel(title, summary, content, url, source_quality=5):
+    """
+    统一过滤逻辑（与 collector.py 一致）：
+    Step 1: 负面过滤
+    Step 2: 白名单域名直接通过
+    Step 3: 综合媒体>=2关键词，其他>=1关键词
+    """
+    if _is_blocked(title, summary, content):
+        return False
+
+    # 白名单域名
+    for wl in WHITELIST_DOMAINS:
+        if wl in url.lower():
             return True
 
-    return False
+    ai_count, data_count = _count_relevant(title, summary, content)
+    total = ai_count + data_count
+
+    if any(s in url.lower() for s in STRICT_MEDIA_DOMAINS):
+        return total >= 2
+    elif source_quality >= 7:
+        return total >= 1
+    else:
+        return total >= 1
 
 
 def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -> list:

@@ -138,7 +138,7 @@ class ArxivSource(Source):
             month = current.month
             url = (
                 "https://export.arxiv.org/api/query?"
-                "search_query=cat:" + self.category + "+AND+submittedDate:[" + str(year) + "%02d01+TO+" + str(year) + "%02d31]&sort_by=submittedDate&sort_order=descending&max_results=50"
+                "search_query=cat:" + self.category + "+AND+submittedDate:[" + str(year) + f"{month:02d}" + "01+TO+" + str(year) + f"{month:02d}" + "31]&sort_by=submittedDate&sort_order=descending&max_results=50"
             )
             urls.append(url)
             if month == 12:
