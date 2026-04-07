@@ -1,7 +1,10 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-OSINT Tracker - 飞书高级战略简报推送引擎 (v4.0 视觉旗舰版)
-利用飞书原生引用语法优化视觉层级，打造顶级内参质感。
+Reporter v5.1 - Pipeline 架构战略简报生成引擎
+Filter → Plugin → Synthesizer → Distributors
+
+数据清洗(intelligence_selector) → 论文解读(paper_highlight) →
+LLM生成(style_prompt) → 飞书推送(feishu) + 微信草稿箱(wechat)
 """
 
 import os
@@ -10,99 +13,194 @@ import json
 import sqlite3
 import requests
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import anthropic
-from prompt_templates import REPORTER_SYSTEM_PROMPT
+from pathlib import Path
 
-# ── 敏感信息过滤 ────────────────────────────────────────────────────────────
+import anthropic
+from dotenv import load_dotenv
+
+# 敏感信息过滤
 _SENSITIVE_KEYS = {
-    "api_key", "api_key", "secret", "token", "password", "auth",
+    "api_key", "secret", "token", "password", "auth",
     "ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "TAVILY_API_KEY",
-    "FEISHU_WEBHOOK_URL"
+    "FEISHU_WEBHOOK_URL", "WECHAT_APPID", "WECHAT_APPSECRET",
 }
 
 def _mask_sensitive(text: str) -> str:
-    """过滤日志中的敏感信息"""
     import re
     result = text
     for key in _SENSITIVE_KEYS:
-        # 匹配 key=value 或 key: value 模式
         pattern = rf'({re.escape(key)}["\s:=]+)[^&\s"\'}}]+'
         result = re.sub(pattern, r'\1***(已隐藏)', result)
     return result
 
-# 配置日志输出带时间戳
-import builtins
-_original_print = builtins.print
-
+_original_print = print
 def log(*args, **kwargs):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # 过滤敏感信息
-    safe_args = tuple(_mask_sensitive(str(arg)) if isinstance(arg, str) else arg for arg in args)
+    safe_args = tuple(_mask_sensitive(str(a)) if isinstance(a, str) else a for a in args)
     _original_print(f"[{timestamp}]", *safe_args, **kwargs)
     sys.stdout.flush()
 
-# 1. 加载环境变量
+# ── 环境变量 ──────────────────────────────────────────────────────────────
 load_dotenv()
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
-# ── 统一的 API 配置获取 ──────────────────────────────────────────────────────
-def _get_anthropic_client():
-    """获取配置好的 Anthropic 客户端（带120秒超时）"""
+# ── LLM 客户端 ────────────────────────────────────────────────────────────
+def _get_anthropic_client() -> anthropic.Anthropic:
     api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("MINIMAX_API_KEY")
     if not api_key:
         raise ValueError("未配置 ANTHROPIC_API_KEY 或 MINIMAX_API_KEY")
     return anthropic.Anthropic(
         api_key=api_key,
         base_url=os.getenv("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/"),
-        timeout=120.0
+        timeout=120.0,
     )
 
 
-def get_recent_intelligence(days):
-    """从数据库捞取情报"""
+# ── Pipeline Stage 1: Filter ────────────────────────────────────────────────
+def _run_filter(days: int) -> dict:
+    """数据清洗与过滤：P0/P1/P2 筛选 + 硬性截断"""
+    try:
+        from intelligence_selector import select_and_rank_events
+        result = select_and_rank_events(days=days, max_events=50)
+        log(f"[Filter] P0={len(result['p0'])} | P1={len(result['p1'])} | P2_brief={len(result['p2_brief'])}")
+        return result
+    except Exception as e:
+        log(f"[Filter] 失败，使用兜底逻辑: {e}")
+        return {"p0": [], "p1": [], "p2_brief": [], "days": days}
+
+
+# ── Pipeline Stage 2: Plugin ────────────────────────────────────────────────
+def _run_paper_plugin(days: int) -> str:
+    """外围情报：arXiv 论文解读"""
+    try:
+        from paper_highlight import get_paper_highlight
+        result = get_paper_highlight(days=days)
+        if result:
+            log(f"[Paper] 获取成功")
+        else:
+            log(f"[Paper] 无相关论文，跳过")
+        return result or ""
+    except Exception as e:
+        log(f"[Paper] 失败: {e}")
+        return ""
+
+
+# ── 历史召回：Entity History ──────────────────────────────────────────────
+def _extract_top_entities(filtered_data: dict, top_n: int = 3) -> list[dict]:
+    """
+    从 P0 事件中按关键词命中权重提取 Top N 实体名称列表。
+    返回 [{"name": "实体名", "title": "相关事件标题"}, ...]
+    """
+    import re
+    p0 = filtered_data.get("p0", [])
+    # 提取实体的启发式规则：标题中的公司/组织名（连续2字以上大写词）
+    # 简化处理：直接用原始标题作为实体关键词
+    entities = []
+    for e in p0[:top_n]:
+        title = e.get("title", "")
+        # 取标题前8个字作为实体标识
+        name = title[:8].strip()
+        if name:
+            entities.append({"name": name, "title": title})
+    return entities
+
+
+def _retrieve_entity_history(entity_name: str, days: int = 90) -> str:
+    """
+    查询某实体近 N 天的相关事件摘要。
+    返回格式化的历史轨迹字符串，如无记录返回空字符串。
+    """
     db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
-
     if not os.path.exists(db_path):
-        log(f"⚠️ 致命错误：数据库文件不存在: {db_path}")
-        return []
-
+        return ""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
-
-    fetch_limit = 50 if days <= 1 else 150
-
-    cursor.execute(f"""
-        SELECT title, summary, risk_level, sentiment, source_url, published_date
+    cursor.execute("""
+        SELECT title, published_date
         FROM events
         WHERE published_date >= ?
-          AND published_date <= datetime('now', '+7 days')
-          AND published_date >= '2019-01-01'
-        ORDER BY
-          CASE WHEN source_url IS NOT NULL AND source_url != '' THEN 0 ELSE 1 END,
-          published_date DESC
-        LIMIT {fetch_limit}
-    """, (time_threshold,))
-
-    events = cursor.fetchall()
+          AND (title LIKE ? OR summary LIKE ?)
+        ORDER BY published_date DESC
+        LIMIT 5
+    """, (time_threshold, f"%{entity_name[:4]}%", f"%{entity_name[:4]}%"))
+    rows = cursor.fetchall()
     conn.close()
-    return events
+    if not rows:
+        return f"- {entity_name}：近{days}天无重大动作记录"
+    summaries = [f"{r[1][:10]}：{r[0][:30]}" for r in rows[:3]]
+    return f"- {entity_name}：{'；'.join(summaries)}"
 
-def generate_report_content(events, report_type, report_title):
-    """召唤 MiniMax-M2 撰写极具深度的战略简报 (提示词已解耦)"""
-    if not events:
-        return f"📡 **{report_title}**：雷达静默，设定周期内未捕获到情报。"
 
-    context = "\n\n".join([
-        f"[{e[5][:10] if e[5] else '未知'}] {e[0]}\n摘要: {e[1]}\n风险: {e[2] or '无'} | 来源: {e[4] or '无'}"
-        for e in events
-    ])
+def _build_history_context(filtered_data: dict, top_n: int = 3) -> str:
+    """构建历史轨迹参考上下文"""
+    entities = _extract_top_entities(filtered_data, top_n)
+    if not entities:
+        return "（无实体历史轨迹数据）"
+    parts = [_retrieve_entity_history(e["name"]) for e in entities]
+    valid_parts = [p for p in parts if p and "无重大动作" not in p]
+    if not valid_parts:
+        return "（近3个月无重大动作记录）"
+    return "\n".join(valid_parts)
+def _build_context(filtered_data: dict, paper_highlight: str, report_type: str) -> str:
+    """构建 LLM 上下文字符串"""
+    lines = []
 
-    # 🚀 核心改动：从外部集中库引入提示词，并动态注入标题
+    # P0 事件（全部）
+    p0 = filtered_data.get("p0", [])
+    p1 = filtered_data.get("p1", [])
+    p2_brief = filtered_data.get("p2_brief", [])
+
+    for i, e in enumerate(p0, 1):
+        lines.append(f"[P0-{i}] {e['title']}")
+        if e.get("summary"):
+            lines.append(f"  摘要: {e['summary'][:200]}")
+        if e.get("source_url"):
+            lines.append(f"  来源: {e['source_url']}")
+        lines.append("")
+
+    # P1 事件（Top3）
+    for i, e in enumerate(p1, 1):
+        lines.append(f"[P1-{i}] {e['title']}")
+        if e.get("summary"):
+            lines.append(f"  摘要: {e['summary'][:200]}")
+        if e.get("source_url"):
+            lines.append(f"  来源: {e['source_url']}")
+        lines.append("")
+
+    # P2 附录（不展开）
+    if p2_brief:
+        lines.append("【附录：其他值得关注】")
+        for e in p2_brief:
+            lines.append(f"  - {e['title']} ({e['published_date'][:10]})")
+
+    context = "\n".join(lines)
+    return context
+
+
+def _run_synthesizer(filtered_data: dict, paper_highlight: str,
+                      report_type: str, report_title: str) -> str:
+    """战略脑图合成：调用 LLM 生成报告"""
+    from style_prompt import REPORTER_SYSTEM_PROMPT
+
+    context = _build_context(filtered_data, paper_highlight, report_type)
+    history_context = _build_history_context(filtered_data, top_n=3)
     system_prompt = REPORTER_SYSTEM_PROMPT.format(report_title=report_title)
 
-    log(f"🧠 正在呼叫 MiniMax-M2.7-highspeed 引擎进行深度战略推演 ({report_type})...")
+    user_prompt = f"""请分析以下情报，撰写{report_title}，严格遵循系统提示词的语言风格和排版规范。
+【重要】请严格按"第一步通读→第二步全局推演→第三步展开"的顺序执行。
+
+【历史轨迹参考】（分析战略判词时必须结合此信息，判断是延续还是转向）
+{history_context}
+
+【情报内容】
+{context}
+
+【今日论文】（如无相关内容可跳过）
+{paper_highlight}
+"""
+
+    log(f"[Synthesizer] 正在呼叫 MiniMax-M2.7-highspeed...")
 
     try:
         client = _get_anthropic_client()
@@ -110,29 +208,30 @@ def generate_report_content(events, report_type, report_title):
             model="MiniMax-M2.7-highspeed",
             max_tokens=4000,
             system=system_prompt,
-            messages=[{"role": "user", "content": [{"type": "text", "text": f"请分析以下情报并严格按规范输出高管内参：\n\n{context}"}]}]
+            messages=[{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
         )
 
         final_text = ""
         log("-" * 50)
         for block in message.content:
             if block.type == "thinking":
-                log(f"🤔 【思维链推演中】:\n{block.thinking[:150]}...\n")
+                log(f"[思考] {block.thinking[:100]}...")
             elif block.type == "text":
                 final_text += block.text
-                log(f"📝 【内参文本生成完毕】")
+                log(f"[生成] 文本块完成")
         log("-" * 50)
         return final_text
 
     except Exception as e:
-        log(f"❌ 大模型调用致命失败: {e}")
+        log(f"[Synthesizer] LLM 调用失败: {e}")
         return None
 
 
-def send_feishu_card(markdown_content, title_text):
-    """发送飞书高级交互式卡片"""
+# ── Pipeline Stage 4: Distributors ─────────────────────────────────────────
+def send_feishu_card(markdown_content: str, title_text: str):
+    """飞书分发"""
     if not FEISHU_WEBHOOK_URL:
-        log("❌ 错误: 未配置 FEISHU_WEBHOOK_URL")
+        log("[Feishu] 未配置 FEISHU_WEBHOOK_URL，跳过")
         return
 
     payload = {
@@ -140,48 +239,90 @@ def send_feishu_card(markdown_content, title_text):
         "card": {
             "config": {"wide_screen_mode": True, "enable_forward": True},
             "header": {
-                "template": "indigo", # 换成靛蓝色，更有极客和高级研报的质感
-                "title": {"content": f"⚡️ 产业追踪雷达 | {title_text}", "tag": "plain_text"}
+                "template": "indigo",
+                "title": {"content": f"⚡️ 产业追踪雷达 | {title_text}", "tag": "plain_text"},
             },
             "elements": [
                 {"tag": "markdown", "content": markdown_content},
                 {"tag": "hr"},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"🤖 MiniMax-M2.7-highspeed 战略参谋驱动 | 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"}]}
-            ]
-        }
+                {"tag": "note", "elements": [
+                    {"tag": "plain_text", "content": f"🤖 MiniMax-M2.7-highspeed 战略参谋驱动 | 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}"}
+                ]},
+            ],
+        },
     }
 
-    log(f"🚀 正在向指挥部推送【{title_text}】...")
+    log(f"[Feishu] 正在推送【{title_text}】...")
     try:
-        response = requests.post(FEISHU_WEBHOOK_URL, headers={'Content-Type': 'application/json'}, json=payload)
-        response.raise_for_status()
-        log(f"✅ 推送成功！飞书响应: {response.json().get('msg')}")
+        resp = requests.post(FEISHU_WEBHOOK_URL, headers={'Content-Type': 'application/json'}, json=payload, timeout=15)
+        resp.raise_for_status()
+        log(f"[Feishu] 推送成功: {resp.json().get('msg')}")
     except Exception as e:
-        log(f"❌ 推送失败: {e}")
+        log(f"[Feishu] 推送失败: {e}")
+
+
+def send_wechat_draft(title: str, author: str, markdown_content: str):
+    """微信草稿箱分发"""
+    try:
+        from wechat_draft_sender import send_to_draft
+        log(f"[WeChat] 正在写入草稿箱【{title}】...")
+        result = send_to_draft(title=title, author=author, markdown_content=markdown_content)
+        log(f"[WeChat] 草稿创建成功: {result}")
+    except ValueError as e:
+        log(f"[WeChat] 跳过（未配置 WECHAT_APPID/APPSECRET）: {e}")
+    except Exception as e:
+        log(f"[WeChat] 草稿创建失败: {e}")
+
+
+# ── 主入口 ─────────────────────────────────────────────────────────────────
+REPORT_CONFIG = {
+    "daily":   {"days": 1,  "title": "每日战略简报",   "max_events": 50},
+    "weekly":  {"days": 7,  "title": "每周深度内参",   "max_events": 80},
+    "monthly": {"days": 30, "title": "月度产业观察",   "max_events": 150},
+}
+
+
+def run_report(report_type: str = "daily", author: str = "战略参谋") -> bool:
+    """
+    执行完整 Pipeline：
+    Filter → Paper Plugin → Synthesizer → Feishu + WeChat
+    """
+    config = REPORT_CONFIG.get(report_type, REPORT_CONFIG["daily"])
+    days = config["days"]
+    title = config["title"]
+    max_events = config["max_events"]
+
+    log(f"=== [{title}] Pipeline 启动 (days={days}) ===")
+
+    # Stage 1: Filter
+    filtered = _run_filter(days)
+    if not filtered["p0"] and not filtered["p1"]:
+        log(f"[{title}] P0+P1 均为空，跳过本次报告")
+        return False
+
+    # Stage 2: Paper
+    paper = _run_paper_plugin(days)
+
+    # Stage 3: Synthesizer
+    report_content = _run_synthesizer(filtered, paper, report_type, title)
+    if not report_content:
+        log(f"[{title}] 报告生成失败，熔断不推送")
+        return False
+
+    # Stage 4: Distribute
+    send_feishu_card(report_content, title)
+
+    # 微信草稿（仅日报追加提示）
+    if report_type == "daily":
+        # 在飞书卡片末尾追加微信提示
+        wechat_note = "\n\n---\n📝 *微信公众号草稿已生成，请前往公众平台后台确认发布*"
+        # 微信独立发一份，不追加提示
+        send_wechat_draft(f"【每日简报】{datetime.now().strftime('%Y-%m-%d')}", author, report_content)
+
+    log(f"=== [{title}] Pipeline 完成 ===")
+    return True
+
 
 if __name__ == "__main__":
-    report_type = "daily"
-    if len(sys.argv) > 1:
-        report_type = sys.argv[1].lower()
-
-    config = {
-        "daily": {"days": 1, "title": "每日战略简报"},
-        "weekly": {"days": 7, "title": "每周深度内参"},
-        "monthly": {"days": 30, "title": "月度产业观察"}
-    }
-
-    selected_config = config.get(report_type, config["daily"])
-    days = selected_config["days"]
-    title = selected_config["title"]
-
-    raw_events = get_recent_intelligence(days=days)
-    if raw_events:
-        log(f"📊 {title}：捞取到过去 {days} 天内的 {len(raw_events)} 条原生情报，准备进行大浪淘沙...")
-        report = generate_report_content(raw_events, report_type, title)
-
-        if report:
-            send_feishu_card(report, title)
-        else:
-            log("🛑 报告生成异常，为防止发送错误信息，已自动熔断并取消飞书推送。")
-    else:
-        log(f"📭 过去 {days} 天无新增情报，取消推送。")
+    report_type = sys.argv[1].lower() if len(sys.argv) > 1 else "daily"
+    run_report(report_type)
