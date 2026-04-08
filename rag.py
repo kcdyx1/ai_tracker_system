@@ -15,7 +15,7 @@ def _get_anthropic_client():
         raise ValueError("参谋部无法运转，请在 .env 中配置 MINIMAX_API_KEY")
     return anthropic.Anthropic(
         api_key=api_key,
-        base_url="http://114.132.200.116:3888/"
+        base_url=os.getenv("ANTHROPIC_BASE_URL")
     )
 
 

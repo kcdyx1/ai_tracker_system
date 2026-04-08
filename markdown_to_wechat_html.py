@@ -7,6 +7,19 @@ Markdown → 微信公众号富文本 HTML 转换器
 import re
 
 
+def strip_html_tags(text: str) -> str:
+    """去除 HTML 标签，提取纯文本（用于微信 digest，不含 emoji）"""
+    import re
+    # 去除 HTML 标签
+    text = re.sub(r'<[^>]+>', '', text)
+    # 去除 HTML 实体
+    text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ').replace('&amp;', '&')
+    # 去除 emoji 和 surrogate pair 字符（微信 digest 不支持）
+    text = re.sub(r'[\U00010000-\U0010ffff]', '', text)  # emoji range
+    text = re.sub(r'[\ud800-\udfff]', '', text)          # surrogate pairs
+    return text.strip()
+
+
 def markdown_to_wechat_html(markdown_text: str) -> str:
     """
     将 Markdown 转换为微信公众号支持的 HTML。

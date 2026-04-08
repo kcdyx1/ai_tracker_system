@@ -38,7 +38,7 @@ def _get_arxiv_client() -> anthropic.Anthropic:
     api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("MINIMAX_API_KEY")
     return anthropic.Anthropic(
         api_key=api_key,
-        base_url=os.getenv("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/"),
+        base_url=os.getenv("ANTHROPIC_BASE_URL"),
         timeout=120.0,
     )
 

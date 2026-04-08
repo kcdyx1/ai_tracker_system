@@ -51,7 +51,7 @@ def _get_anthropic_client() -> anthropic.Anthropic:
         raise ValueError("未配置 ANTHROPIC_API_KEY 或 MINIMAX_API_KEY")
     return anthropic.Anthropic(
         api_key=api_key,
-        base_url=os.getenv("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/"),
+        base_url=os.getenv("ANTHROPIC_BASE_URL"),
         timeout=120.0,
     )
 
@@ -265,11 +265,13 @@ def send_wechat_draft(title: str, author: str, markdown_content: str):
     """微信草稿箱分发"""
     try:
         from wechat_draft_sender import send_to_draft
+        import os
+        cover_path = os.path.join(os.path.dirname(__file__), "data", "wechat_cover.png")
         log(f"[WeChat] 正在写入草稿箱【{title}】...")
-        result = send_to_draft(title=title, author=author, markdown_content=markdown_content)
+        result = send_to_draft(title=title, author=author, markdown_content=markdown_content, cover_image_path=cover_path)
         log(f"[WeChat] 草稿创建成功: {result}")
     except ValueError as e:
-        log(f"[WeChat] 跳过（未配置 WECHAT_APPID/APPSECRET）: {e}")
+        log(f"[WeChat] 跳过（无封面图）: {e}")
     except Exception as e:
         log(f"[WeChat] 草稿创建失败: {e}")
 
@@ -282,7 +284,7 @@ REPORT_CONFIG = {
 }
 
 
-def run_report(report_type: str = "daily", author: str = "战略参谋") -> bool:
+def run_report(report_type: str = "daily", author: str = "kangchen") -> bool:
     """
     执行完整 Pipeline：
     Filter → Paper Plugin → Synthesizer → Feishu + WeChat
@@ -309,15 +311,18 @@ def run_report(report_type: str = "daily", author: str = "战略参谋") -> bool
         log(f"[{title}] 报告生成失败，熔断不推送")
         return False
 
-    # Stage 4: Distribute
-    send_feishu_card(report_content, title)
+    # Stage 4: Distribute（飞书 + 微信完全独立，互不阻塞）
+    # 飞书推送
+    try:
+        send_feishu_card(report_content, title)
+    except Exception as e:
+        log(f"[{title}] 飞书推送异常: {e}")
 
-    # 微信草稿（仅日报追加提示）
-    if report_type == "daily":
-        # 在飞书卡片末尾追加微信提示
-        wechat_note = "\n\n---\n📝 *微信公众号草稿已生成，请前往公众平台后台确认发布*"
-        # 微信独立发一份，不追加提示
-        send_wechat_draft(f"【每日简报】{datetime.now().strftime('%Y-%m-%d')}", author, report_content)
+    # 微信草稿箱推送（所有报告类型均尝试）
+    try:
+        send_wechat_draft(f"【{title}】{datetime.now().strftime('%Y-%m-%d')}", author, report_content)
+    except Exception as e:
+        log(f"[{title}] 微信草稿箱推送异常: {e}")
 
     log(f"=== [{title}] Pipeline 完成 ===")
     return True

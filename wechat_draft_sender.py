@@ -15,12 +15,12 @@ from pathlib import Path
 
 # 从 markdown_to_wechat_html 导入
 try:
-    from markdown_to_wechat_html import markdown_to_wechat_html, wrap_wechat_article
+    from markdown_to_wechat_html import markdown_to_wechat_html, strip_html_tags, wrap_wechat_article
 except ImportError:
     # 本地导入
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
-    from markdown_to_wechat_html import markdown_to_wechat_html, wrap_wechat_article
+    from markdown_to_wechat_html import markdown_to_wechat_html, strip_html_tags, wrap_wechat_article
 
 # Token 缓存文件
 _TOKEN_CACHE_FILE = os.path.join(os.path.dirname(__file__), "data", "wechat_token_cache.json")
@@ -109,13 +109,14 @@ def create_draft(access_token: str, title: str, author: str, markdown_content: s
     content_html = markdown_to_wechat_html(markdown_content)
 
     # 2. 构造文章结构
+    # thumb_media_id 为空时传 None（JSON中为null），避免微信返回 invalid media_id
     articles = [{
         "title": title,
         "author": author,
-        "digest": content_html[:120].replace("<", "&lt;").replace(">", "&gt;"),
+        "digest": strip_html_tags(content_html)[:20].replace("<", "&lt;").replace(">", "&gt;"),
         "content": content_html,
         "content_source_url": "",
-        "thumb_media_id": thumb_media_id or "",
+        "thumb_media_id": thumb_media_id or None,
         "need_open_comment": 0,
         "only_fans_can_comment": 0,
     }]
@@ -123,7 +124,8 @@ def create_draft(access_token: str, title: str, author: str, markdown_content: s
     payload = {"articles": articles}
 
     url = f"https://api.weixin.qq.com/cgi-bin/draft/add?access_token={access_token}"
-    resp = requests.post(url, json=payload, timeout=15)
+    resp = requests.post(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                         headers={"Content-Type": "application/json; charset=utf-8"}, timeout=15)
     result = resp.json()
 
     if result.get("errcode", 0) != 0:
@@ -135,6 +137,7 @@ def create_draft(access_token: str, title: str, author: str, markdown_content: s
 def send_to_draft(title: str, author: str, markdown_content: str, cover_image_path: str = None) -> dict:
     """
     完整流程：获取 token → 上传封面图（如有）→ 创建草稿。
+    如无封面图，跳过创建（微信草稿必须附封面图）。
     返回创建结果。
     """
     token = get_access_token()
@@ -142,6 +145,9 @@ def send_to_draft(title: str, author: str, markdown_content: str, cover_image_pa
     thumb_media_id = None
     if cover_image_path and os.path.exists(cover_image_path):
         thumb_media_id = upload_thumb_media(token, cover_image_path)
+    else:
+        # 微信草稿必须附封面图，无图则跳过
+        raise ValueError("未配置封面图，跳过微信草稿创建。如需创建草稿，请设置 cover_image_path 或将图片放入 data/wechat_cover.png")
 
     result = create_draft(token, title, author, markdown_content, thumb_media_id)
     return result

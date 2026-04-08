@@ -33,3 +33,11 @@ data/
 # 前端 Node 忽略项
 frontend/node_modules/
 .DS_Store
+# 模板与草稿文件
+*.bak*
+*.bak.v*
+polished_article.md
+
+# Prompt 模板文件
+prompt_templates.py
+style_prompt.py

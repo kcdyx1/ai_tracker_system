@@ -98,7 +98,7 @@ def check_rss_proxy() -> dict:
     """检查 MiniMax 代理健康"""
     try:
         import urllib.request
-        proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/")
+        proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "http://")
         req = urllib.request.Request(
             proxy_url + "v1/models",
             headers={"Authorization": f"Bearer {MINIMAX_API_KEY}"}
