@@ -187,7 +187,7 @@ def save_extraction_result(result) -> None:
 
         # 预防重复：建立 (name, type) → 已有ID 的映射
         cursor.execute("SELECT name, type, id FROM entities")
-        name_type_to_id = {(row['name'], row['type']): row['id'] for row in cursor.fetchall()}
+        name_type_to_id = {(row[0], row[1]): row[2] for row in cursor.fetchall()}
 
         id_mapping = {}
 
@@ -198,13 +198,12 @@ def save_extraction_result(result) -> None:
             attributes = {k: v for k, v in entity_dict.items() if k not in base_keys and v is not None and v != []}
 
             all_aliases = {}
-            cursor.execute("SELECT id, aliases_json FROM entities WHERE type = %s", (entity_type,))
-            for row in cursor.fetchall():
-                if row['aliases_json'] and row['aliases_json'] not in ("null", ""):
+            for row in cursor.execute("SELECT id, aliases_json FROM entities WHERE type = %s", (entity_type,)):
+                if row[1] and row[1] not in ("null", ""):
                     try:
-                        all_aliases[row['id']] = json.loads(row['aliases_json'])
+                        all_aliases[row[0]] = json.loads(row[1])
                     except json.JSONDecodeError:
-                        all_aliases[row['id']] = []
+                        all_aliases[row[0]] = []
 
             canonical_id = find_entity_by_alias(entity.name, entity_type, name_type_to_id, all_aliases)
             use_id = canonical_id if canonical_id else entity.id
@@ -214,10 +213,10 @@ def save_extraction_result(result) -> None:
                 row = cursor.fetchone()
                 if row:
                     try:
-                        existing_attrs = json.loads(row['attributes_json']) if row['attributes_json'] and row['attributes_json'] not in ("null", "") else {}
+                        existing_attrs = json.loads(row[0]) if row[0] and row[0] not in ("null", "") else {}
                     except json.JSONDecodeError:
                         existing_attrs = {}
-                    existing_desc = row['description'] or ""
+                    existing_desc = row[1] or ""
                     for k, v in attributes.items():
                         if k not in existing_attrs or not existing_attrs[k]:
                             existing_attrs[k] = v
@@ -251,7 +250,7 @@ def save_extraction_result(result) -> None:
 
         # events 去重
         cursor.execute("SELECT title, date FROM events")
-        existing_event_keys = set((row['title'], row['date']) for row in cursor.fetchall())
+        existing_event_keys = set((row[0], row[1]) for row in cursor.fetchall())
 
         for event in result.events:
             event_key = (event.title, _format_dt(event.date))
@@ -337,31 +336,28 @@ def get_recent_events(days: int = 7) -> list:
         conn.close()
 
 
-def push_task(url: str):
-    """Push URL to task queue, returns (task_id, is_new) or (None, False)"""
+def push_task(url: str) -> bool:
     conn = _get_pg_conn()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, status FROM task_queue WHERE url = %s", (url,))
+        cursor.execute("SELECT status FROM task_queue WHERE url = %s", (url,))
         row = cursor.fetchone()
         if row is None:
             cursor.execute(
-                "INSERT INTO task_queue (url, status, created_at) VALUES (%s, 'pending', %s) RETURNING id",
+                "INSERT INTO task_queue (url, status, created_at) VALUES (%s, 'pending', %s)",
                 (url, _format_dt(datetime.now()))
             )
             conn.commit()
-            task_id = cursor.fetchone()["id"]
-            return task_id, True
+            return True
         else:
-            task_id = row["id"]
             if row["status"] in ("failed", "completed"):
                 cursor.execute(
                     "UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = %s WHERE url = %s",
                     (_format_dt(datetime.now()), url)
                 )
                 conn.commit()
-                return task_id, True
-            return task_id, False
+                return True
+            return False
     finally:
         conn.close()
 

@@ -383,10 +383,8 @@ def is_high_value(title: str, summary: str = "", url: str = "", source_quality: 
 # ─── 以下为原有 collector.py 的其余代码（不做修改）───
 
 def get_connection():
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH, timeout=60.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+    from database import get_connection as pg_get_connection
+    return pg_get_connection()
 
 
 def save_paper(paper_data: dict) -> bool:
@@ -394,11 +392,20 @@ def save_paper(paper_data: dict) -> bool:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT OR REPLACE INTO papers (
+            INSERT INTO papers (
                 id, title, abstract, authors, published_date, updated_date,
                 arxiv_id, arxiv_url, pdf_url, categories, comment, doi,
                 citation_count, reference_count, source, source_url, raw_metadata, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                title = EXCLUDED.title,
+                abstract = EXCLUDED.abstract,
+                authors = EXCLUDED.authors,
+                published_date = EXCLUDED.published_date,
+                updated_date = EXCLUDED.updated_date,
+                citation_count = EXCLUDED.citation_count,
+                reference_count = EXCLUDED.reference_count,
+                raw_metadata = EXCLUDED.raw_metadata
         """, (
             paper_data.get('id'),
             paper_data.get('title'),
@@ -433,12 +440,22 @@ def save_repository(repo_data: dict) -> bool:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT OR REPLACE INTO repositories (
+            INSERT INTO repositories (
                 id, name, full_name, description, stars, forks, watchers, open_issues,
                 language, license, topics, owner, owner_url, created_at, updated_at,
                 pushed_at, html_url, github_url, issues_url, primary_language, languages,
                 source, trending_date, raw_metadata, created_at_ts
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                full_name = EXCLUDED.full_name,
+                description = EXCLUDED.description,
+                stars = EXCLUDED.stars,
+                forks = EXCLUDED.forks,
+                watchers = EXCLUDED.watchers,
+                open_issues = EXCLUDED.open_issues,
+                languages = EXCLUDED.languages,
+                raw_metadata = EXCLUDED.raw_metadata
         """, (
             repo_data.get('id'),
             repo_data.get('name'),
@@ -475,9 +492,13 @@ def save_repository(repo_data: dict) -> bool:
         conn.close()
 
 
-def push_task(url: str) -> bool:
+def push_task(url: str):
     from database import push_task as db_push_task
-    return db_push_task(url)
+    from worker import process_intel_task
+    task_id, is_new = db_push_task(url)
+    if is_new and task_id:
+        process_intel_task.delay(task_id, url)
+    return is_new
 
 
 @dataclass

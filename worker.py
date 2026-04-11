@@ -8,11 +8,10 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 from markitdown import MarkItDown
-import sqlite3
 import json
 from datetime import datetime
 
-from database import DB_PATH, update_task_status, save_extraction_result
+from database import update_task_status, save_extraction_result, get_connection
 from extractor import extract_with_validation
 from ingestion import fetch_clean_markdown
 
@@ -47,9 +46,9 @@ def process_intel_task(self, task_id: int, url: str):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT status FROM task_queue WHERE id = ?", (task_id,))
+        cur.execute("SELECT status FROM task_queue WHERE id = %s", (task_id,))
         row = cur.fetchone()
-        if row and row[0] == "completed":
+        if row and row['status'] == "completed":
             print(f"  skip: task #{task_id} already completed")
             return
     finally:
@@ -98,22 +97,22 @@ def _build_in_clause(ids: list) -> tuple[str, list]:
     """构建安全的 SQL IN 子句，返回 (placeholders, params)"""
     if not ids:
         return "('__invalid__')", []
-    placeholders = ','.join('?' * len(ids))
-    return f'({placeholders})', ids
+    placeholders = ','.join('%s' * len(ids))
+    return f'({placeholders})', list(ids)
 
 
 @celery_app.task
 def reset_stuck_tasks():
     """每10分钟重置卡住的 processing 任务（超过30分钟未完成视为卡住）"""
     print(f"\n🔧 [Stuck任务清理] 开始扫描卡住的任务...")
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             UPDATE task_queue
             SET status = 'pending', error_message = 'auto-reset: stuck in processing > 30min'
             WHERE status = 'processing'
-            AND created_at < datetime('now', '-30 minutes')
+            AND created_at < NOW() - INTERVAL '30 minutes'
         """)
         conn.commit()
         count = cursor.rowcount
@@ -129,7 +128,7 @@ def reset_stuck_tasks():
 def deduplicate_entities():
     """每天定时执行实体去重合并"""
     print(f"\n🧹 [去重任务] 开始执行实体去重...")
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn = get_connection()
     cursor = conn.cursor()
 
     try:
@@ -153,7 +152,7 @@ def deduplicate_entities():
             cursor.execute("""
                 SELECT id, description, attributes_json
                 FROM entities
-                WHERE name = ? AND type = ?
+                WHERE name = %s AND type = %s
             """, (name, etype))
             rows = cursor.fetchall()
 
@@ -182,14 +181,14 @@ def deduplicate_entities():
             in_clause, in_params = _build_in_clause(duplicate_ids)
             cursor.execute(f"""
                 UPDATE relationships
-                SET source_id = ?
+                SET source_id = %s
                 WHERE source_id IN {in_clause}
             """, [primary_id] + in_params)
 
             in_clause, in_params = _build_in_clause(duplicate_ids)
             cursor.execute(f"""
                 UPDATE relationships
-                SET target_id = ?
+                SET target_id = %s
                 WHERE target_id IN {in_clause}
             """, [primary_id] + in_params)
 
@@ -214,7 +213,7 @@ def deduplicate_entities():
                         new_ids.append(eid)
                 if updated:
                     cursor.execute(
-                        "UPDATE events SET involved_entities_json = ? WHERE id = ?",
+                        "UPDATE events SET involved_entities_json = %s WHERE id = %s",
                         (json.dumps(new_ids, ensure_ascii=False), event_id)
                     )
 
@@ -239,27 +238,32 @@ def deduplicate_entities():
 
 @celery_app.task
 def backup_database():
-    """每天定时备份数据库"""
-    import shutil
+    """每天定时备份 PostgreSQL 数据库（pg_dump）"""
+    import subprocess
     from pathlib import Path
+    import os
 
-    backup_dir = Path(DB_PATH).parent / "backups"
+    backup_dir = Path.home() / ".openclaw" / "workspace" / "ai_tracker_system" / "backups"
     backup_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_file = backup_dir / f"ai_tracker_{timestamp}.db"
+    backup_file = backup_dir / f"ai_tracker_{timestamp}.sql"
 
     try:
-        shutil.copy2(DB_PATH, backup_file)
-        print(f"💾 [备份任务] 数据库已备份到: {backup_file}")
-
-        # 保留最近7天备份，删除更旧的
-        backups = sorted(backup_dir.glob("ai_tracker_*.db"), key=lambda p: p.stat().st_mtime)
-        for old_backup in backups[:-7]:
-            old_backup.unlink()
-            print(f"🗑️ [备份任务] 删除过期备份: {old_backup}")
-
-        print(f"💾 [备份任务] 备份完成，当前共 {len(backups)} 个备份")
-
+        env = dict(os.environ)
+        env['PGPASSWORD'] = 'difyai123456'
+        result = subprocess.run([
+            'pg_dump', '-h', '172.20.0.6', '-U', 'postgres',
+            '-d', 'ai_tracker', '-f', str(backup_file)
+        ], env=env, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            print(f"💾 [备份任务] 数据库已备份到: {backup_file}")
+            backups = sorted(backup_dir.glob("ai_tracker_*.sql"), key=lambda p: p.stat().st_mtime)
+            for old_b in backups[:-7]:
+                old_b.unlink()
+                print(f"🗑️ [备份任务] 删除过期备份: {old_b}")
+            print(f"💾 [备份任务] 当前共 {len(backups)} 个备份")
+        else:
+            print(f"❌ [备份任务] pg_dump 失败: {result.stderr}")
     except Exception as e:
         print(f"❌ [备份任务] 备份失败: {e}")

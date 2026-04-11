@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 """
-deduplicate_entities.py — 实体去重脚本
+deduplicate_entities.py — 实体去重脚本 (PostgreSQL版)
 对每组 name+type 相同的实体，保留最完整的一个，其余合并到它身上。
 """
-import sqlite3
 import json
 import logging
 from datetime import datetime
 
-# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 import sys
 sys.path.insert(0, "/home/kangchen/.openclaw/workspace/ai_tracker_system")
-from database import DB_PATH
-DB = DB_PATH
+from database import get_connection
 
 
 def _safe_json_loads(json_str: str, default=None):
-    """安全地解析 JSON，避免异常被静默吞掉"""
     if not json_str or json_str in ('null', '', 'None'):
         return default if default is not None else {}
     try:
@@ -30,10 +26,9 @@ def _safe_json_loads(json_str: str, default=None):
 
 
 def merge_entities():
-    conn = sqlite3.connect(DB)
+    conn = get_connection()
     c = conn.cursor()
 
-    # 找出所有有重复的 (name, type) 组
     c.execute("""
         SELECT name, type, COUNT(*) as cnt
         FROM entities
@@ -46,18 +41,22 @@ def merge_entities():
 
     total_merged = 0
 
-    for name, etype, cnt in groups:
-        # 找出该组所有实体ID及其完整度（description + attributes 非空字段数）
+    for row in groups:
+        name = row["name"]
+        etype = row["type"]
+        cnt = row["cnt"]
+
         c.execute("""
             SELECT id, description, attributes_json
             FROM entities
-            WHERE name = ? AND type = ?
+            WHERE name = %s AND type = %s
         """, (name, etype))
-        rows = c.fetchall()
+        entity_rows = c.fetchall()
 
-        # 计算完整度分数
-        def completeness(row):
-            eid, desc, attrs_str = row
+        def completeness(erow):
+            eid = erow["id"]
+            desc = erow["description"]
+            attrs_str = erow["attributes_json"]
             score = 0
             if desc and desc != 'null' and len(str(desc)) > 5:
                 score += 2
@@ -67,127 +66,129 @@ def merge_entities():
                     score += len([v for v in attrs.values() if v and str(v) not in ('[]', '{}', 'null', 'None', '')])
             return score
 
-        scored = [(r, completeness(r)) for r in rows]
+        scored = [(r, completeness(r)) for r in entity_rows]
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        keep_id = scored[0][0][0]   # 最完整的保留
-        dup_ids = [r[0] for r, _ in scored[1:]]  # 其余的是副本
+        keep_id = scored[0][0]["id"]
+        dup_ids = [r["id"] for r, _ in scored[1:]]
 
-        print(f"  【{name}】({etype}) x{cnt} → 保留 {keep_id}，合并 {len(dup_ids)} 个副本")
+        print(f"  【{name}】({etype}) x{cnt} -> 保留 {keep_id}，合并 {len(dup_ids)} 个副本")
 
-        # 1. 处理 relationships：先把副本的独立关系嫁接到保留ID上
-        #    规则：只迁移副本独有的关系（保留ID没有同类型指向同target的）
         for dup_id in dup_ids:
             try:
-                c.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE source_id = ?", (dup_id,))
-                for src, tgt, rtype in c.fetchall():
-                    # 跳过已存在相同关系的情况（避免 UNIQUE 约束冲突）
+                c.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE source_id = %s", (dup_id,))
+                for rel_row in c.fetchall():
+                    src, tgt, rtype = rel_row["source_id"], rel_row["target_id"], rel_row["relation_type"]
                     c.execute("""
                         SELECT COUNT(*) FROM relationships
-                        WHERE source_id = ? AND target_id = ? AND relation_type = ?
+                        WHERE source_id = %s AND target_id = %s AND relation_type = %s
                     """, (keep_id, tgt, rtype))
-                    if c.fetchone()[0] == 0:
+                    if c.fetchone()["count"] == 0:
                         c.execute("""
-                            UPDATE relationships SET source_id = ?
-                            WHERE source_id = ? AND target_id = ? AND relation_type = ?
+                            UPDATE relationships SET source_id = %s
+                            WHERE source_id = %s AND target_id = %s AND relation_type = %s
                         """, (keep_id, dup_id, tgt, rtype))
                     else:
-                        c.execute("DELETE FROM relationships WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+                        c.execute("DELETE FROM relationships WHERE source_id = %s AND target_id = %s AND relation_type = %s",
                                  (dup_id, tgt, rtype))
-            except sqlite3.Error as e:
+            except Exception as e:
                 logger.error(f"处理 source_id 关系时出错 (dup_id={dup_id}): {e}")
 
             try:
-                c.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE target_id = ?", (dup_id,))
-                for src, tgt, rtype in c.fetchall():
+                c.execute("SELECT source_id, target_id, relation_type FROM relationships WHERE target_id = %s", (dup_id,))
+                for rel_row in c.fetchall():
+                    src, tgt, rtype = rel_row["source_id"], rel_row["target_id"], rel_row["relation_type"]
                     c.execute("""
                         SELECT COUNT(*) FROM relationships
-                        WHERE source_id = ? AND target_id = ? AND relation_type = ?
+                        WHERE source_id = %s AND target_id = %s AND relation_type = %s
                     """, (src, keep_id, rtype))
-                    if c.fetchone()[0] == 0:
+                    if c.fetchone()["count"] == 0:
                         c.execute("""
-                            UPDATE relationships SET target_id = ?
-                            WHERE source_id = ? AND target_id = ? AND relation_type = ?
+                            UPDATE relationships SET target_id = %s
+                            WHERE source_id = %s AND target_id = %s AND relation_type = %s
                         """, (keep_id, src, dup_id, rtype))
                     else:
-                        c.execute("DELETE FROM relationships WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+                        c.execute("DELETE FROM relationships WHERE source_id = %s AND target_id = %s AND relation_type = %s",
                                  (src, dup_id, rtype))
-            except sqlite3.Error as e:
+            except Exception as e:
                 logger.error(f"处理 target_id 关系时出错 (dup_id={dup_id}): {e}")
 
-        # 2. 更新 events 表的 involved_entities_json
         try:
             c.execute("SELECT id, involved_entities_json FROM events")
-            for event_id, json_str in c.fetchall():
+            for event_row in c.fetchall():
+                event_id = event_row["id"]
+                json_str = event_row["involved_entities_json"]
                 if not json_str or json_str == 'null':
                     continue
                 ids = _safe_json_loads(json_str, [])
                 if not isinstance(ids, list):
                     ids = []
-                if dup_id in ids:
-                    ids = [keep_id if i == dup_id else i for i in ids]
-                    # 去重
+                changed = False
+                for i in range(len(ids)):
+                    if ids[i] in dup_ids:
+                        ids[i] = keep_id
+                        changed = True
+                if changed:
                     seen, unique_ids = set(), []
                     for i in ids:
                         if i not in seen:
                             seen.add(i)
                             unique_ids.append(i)
-                    c.execute("UPDATE events SET involved_entities_json = ? WHERE id = ?",
+                    c.execute("UPDATE events SET involved_entities_json = %s WHERE id = %s",
                              (json.dumps(unique_ids), event_id))
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(f"更新事件实体关联时出错: {e}")
 
-        # 3. 合并 attributes：副本中的额外属性合并到保留实体
         keep_attrs = _safe_json_loads(
-            c.execute("SELECT attributes_json FROM entities WHERE id = ?", (keep_id,)).fetchone()[0],
+            c.execute("SELECT attributes_json FROM entities WHERE id = %s", (keep_id,)).fetchone()["attributes_json"] or '{}',
             {}
         )
 
         for dup_id in dup_ids:
             try:
-                dup_attrs_str = c.execute("SELECT attributes_json FROM entities WHERE id = ?", (dup_id,)).fetchone()[0]
+                dup_attrs_str = c.execute("SELECT attributes_json FROM entities WHERE id = %s", (dup_id,)).fetchone()["attributes_json"]
                 dup_attrs = _safe_json_loads(dup_attrs_str, {})
                 if dup_attrs:
                     for k, v in dup_attrs.items():
                         if k not in keep_attrs or keep_attrs[k] in (None, '', '[]'):
                             keep_attrs[k] = v
-            except sqlite3.Error as e:
+            except Exception as e:
                 logger.error(f"合并属性时出错 (dup_id={dup_id}): {e}")
 
         new_attrs_json = json.dumps(keep_attrs, ensure_ascii=False)
 
-        # 4. 合并 description：保留最长的非空描述
         keep_desc = ''
         try:
-            keep_desc = c.execute("SELECT description FROM entities WHERE id = ?", (keep_id,)).fetchone()[0] or ''
-        except sqlite3.Error as e:
+            result = c.execute("SELECT description FROM entities WHERE id = %s", (keep_id,)).fetchone()
+            keep_desc = result["description"] or '' if result else ''
+        except Exception as e:
             logger.error(f"获取保留实体描述时出错: {e}")
 
         for dup_id in dup_ids:
             try:
-                dup_desc = c.execute("SELECT description FROM entities WHERE id = ?", (dup_id,)).fetchone()[0] or ''
+                result = c.execute("SELECT description FROM entities WHERE id = %s", (dup_id,)).fetchone()
+                dup_desc = result["description"] or '' if result else ''
                 if len(dup_desc) > len(keep_desc) and dup_desc not in ('', 'null', 'None'):
                     keep_desc = dup_desc
-            except sqlite3.Error as e:
+            except Exception as e:
                 logger.error(f"获取副本描述时出错 (dup_id={dup_id}): {e}")
 
         try:
-            c.execute("UPDATE entities SET description = ?, attributes_json = ? WHERE id = ?",
+            c.execute("UPDATE entities SET description = %s, attributes_json = %s WHERE id = %s",
                      (keep_desc, new_attrs_json, keep_id))
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(f"更新实体数据时出错 (keep_id={keep_id}): {e}")
 
-        # 5. 删除副本
         if dup_ids:
-            placeholders = ','.join('?' * len(dup_ids))
             try:
-                c.execute(f"DELETE FROM entities WHERE id IN ({placeholders})", dup_ids)
-                total_merged += len(dup_ids)
-            except sqlite3.Error as e:
+                for dup_id in dup_ids:
+                    c.execute("DELETE FROM entities WHERE id = %s", (dup_id,))
+                    total_merged += 1
+            except Exception as e:
                 logger.error(f"删除重复实体时出错: {e}")
 
     conn.commit()
-    print(f"\n✅ 去重完成！共合并 {total_merged} 个重复实体副本。")
+    print(f"\n 去重完成！共合并 {total_merged} 个重复实体副本。")
     conn.close()
 
 

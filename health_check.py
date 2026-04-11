@@ -5,7 +5,6 @@
 """
 
 import subprocess
-import sqlite3
 import json
 import os
 from datetime import datetime, timezone
@@ -117,16 +116,17 @@ def check_rss_proxy() -> dict:
 def check_task_queue() -> dict:
     """检查任务队列状态"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        from database import get_connection
+        conn = get_connection()
         c = conn.cursor()
         c.execute("SELECT status, COUNT(*) FROM task_queue GROUP BY status")
         rows = c.fetchall()
-        c.execute("SELECT COUNT(*) FROM task_queue WHERE created_at >= date('now')")
-        today = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM task_queue WHERE created_at >= CURRENT_DATE")
+        today = c.fetchone()["count"]
         c.execute("SELECT COUNT(*) FROM task_queue WHERE status = 'failed'")
-        failed = c.fetchone()[0]
+        failed = c.fetchone()["count"]
         conn.close()
-        counts = {status: count for status, count in rows}
+        counts = {row["status"]: row["count"] for row in rows}
         return {
             "status": "healthy" if failed < 50 else "warning",
             "counts": counts,

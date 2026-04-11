@@ -6,7 +6,6 @@
 
 import os
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -38,6 +37,47 @@ _P0_KW = {
     "退任", "任命", "收购", "战略投资", "独角兽",
 }
 
+# 深度技术关键词 — 命中这些关键词的文章获得额外加权
+_DEEP_TECH_KW = {
+    # 核心技术突破
+    "context window", "上下文窗口", "百万token", "上下文长度",
+    "scaling law", "scaling", "涌现", "emergent",
+    "rlhf", "dpo", "ppo", "reward model", "强化学习",
+    "moe", "mixture of experts", "混合专家",
+    "speculative decoding", "投点解码", "kv cache",
+    "quantization", "量化", "int8", "fp8", "nf4", "nf8",
+    "pruning", "剪枝", "knowledge distillation", "蒸馏",
+    "attention sink", "paged attention",
+    "chain-of-thought", "cot", "思维链", "reasoning model",
+    "inference optimization", "推理优化",
+    "训练", "预训练", "pre-train", "pretrain", "post-train",
+    "微调", "fine-tuning", "lora", "qlora", "adapter",
+    "embedding", "向量化", "vector db", "vector search",
+    "graphrag", "knowledge graph", "知识图谱",
+    # Agent 核心架构
+    "agent architecture", "agent system", "智能体架构", "agent 调度",
+    "multi-agent", "multiagent", "多智能体", "多agent",
+    "memory", "long-term memory", "长期记忆", "上下文管理",
+    "tool use", "tool learning", "函数调用",
+    # 推理框架
+    "vllm", "text-generation-inference", "tgi", "llama.cpp", "ollama",
+    "paged attention", "flash attention",
+    "ray", "distributed training",
+    # 重要论文/研究
+    "paper", "论文", "arxiv", "icml", "neurips", "iclr", "aaai", "kdd",
+}
+
+# 高质量技术 newsletter 源 — 额外 +3 加权
+_TECH_NEWSLETTER_DOMAINS = {
+    "importai.substack.com",
+    "drfeeds.com",           # The Batch
+    "deeplearning.ai",       # Andrew Ng's newsletter
+    "buttondown.email",
+    "jack-clark.substack.com",
+    "simonw.substack.com",
+    "garymarcus.substack.com",
+}
+
 _P1_KW = {
     "商业化", "落地", "收入", "估值", "营收", "盈利", "产品发布", "发布",
     "合作", "伙伴", "生态", "市场份额", "竞争",
@@ -54,16 +94,30 @@ def _score_event(title: str, summary: str, source_url: str) -> tuple[str, int]:
     返回 (priority, score)
     """
     text = (title + " " + (summary or "")).lower()
+    url_lower = (source_url or "").lower()
 
     # 先检查 blocklist
     for kw in _BLOCK_KW:
         if kw.lower() in text:
             return "BLOCK", 0
 
-    # P0 检查
+    # ── 来源质量加成 ─────────────────────────────
+    source_bonus = 0
+    if any(d in url_lower for d in _TECH_NEWSLETTER_DOMAINS):
+        source_bonus += 3  # 高质量技术 newsletter 额外加权
+
+    # ── P0 核心分计算 ────────────────────────────
     p0_score = sum(1 for kw in _P0_KW if kw.lower() in text)
 
-    # 数据+AI 交叉加权
+    # ── 深度技术关键词额外加权 ───────────────────
+    deep_tech_hits = sum(1 for kw in _DEEP_TECH_KW if kw.lower() in text)
+    p0_score += deep_tech_hits  # 每个深度技术关键词 +1
+
+    # 命中多个深度技术关键词（>=2）额外 +2
+    if deep_tech_hits >= 2:
+        p0_score += 2
+
+    # ── 交叉领域加权 ─────────────────────────────
     has_ai = any(kw.lower() in text for kw in _AI_KW)
     has_data = any(kw.lower() in text for kw in _DATA_KW)
     if has_ai and has_data:
@@ -74,15 +128,20 @@ def _score_event(title: str, summary: str, source_url: str) -> tuple[str, int]:
         if any(kw.lower() in text for kw in {"数据", "数据库", "向量", "知识库", "RAG"}):
             p0_score += 2
 
+    # ── 来源加成 ─────────────────────────────────
+    p0_score += source_bonus
+
     if p0_score >= 2:
         return "P0", p0_score
 
-    # P1 检查
+    # ── P1 检查 ──────────────────────────────────
     p1_score = sum(1 for kw in _P1_KW if kw.lower() in text)
+    p1_score += source_bonus  # newsletter 加成也适用于 P1
+
     if p1_score >= 1:
         return "P1", p1_score
 
-    # P2 检查
+    # ── P2 检查 ──────────────────────────────────
     p2_score = sum(1 for kw in _P2_KW if kw.lower() in text)
     if p2_score >= 1:
         return "P2", p2_score
@@ -99,10 +158,13 @@ def _is_valid_source(source_url: str) -> bool:
     if not source_url:
         return False
     source_lower = source_url.lower()
-    # 过滤个人博客、不知名站点
+    # 过滤个人博客、不知名站点（高质量 newsletter 除外）
     block_domains = ["163.com", "sohu.com", "sina.com", "qq.com", "ifeng.com"]
     for d in block_domains:
         if d in source_lower:
+            # 例外：高质量 newsletter
+            if any(nl in source_lower for nl in _TECH_NEWSLETTER_DOMAINS):
+                continue
             return False
     return True
 
@@ -112,37 +174,43 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     主函数：从数据库拉取事件，P0/P1/P2 筛选 + 截断，返回精简列表。
 
     截断规则：
-    - P0：全部保留（上限10条）
-    - P1：保留 Top3
+    - P0：全部保留（上限15条）
+    - P1：保留 Top5
     - P2：仅保留一句话提及（不出现在主报告，在附录）
     """
-    db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
-    if not os.path.exists(db_path):
+    try:
+        from database import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
+        cursor.execute("""
+            SELECT id, title, summary, source_url, published_date, risk_level, sentiment
+            FROM events
+            WHERE published_date >= %s
+              AND published_date <= NOW() + INTERVAL '7 days'
+              AND published_date >= '2019-01-01'
+            ORDER BY published_date DESC
+            LIMIT %s
+        """, (time_threshold, max_events))
+
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception:
         return []
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
-    cursor.execute("""
-        SELECT id, title, summary, source_url, published_date, risk_level, sentiment
-        FROM events
-        WHERE published_date >= ?
-          AND published_date <= datetime('now', '+7 days')
-          AND published_date >= '2019-01-01'
-        ORDER BY published_date DESC
-        LIMIT ?
-    """, (time_threshold, max_events))
-
-    rows = cursor.fetchall()
-    conn.close()
 
     p0_events = []
     p1_events = []
     p2_events = []
 
     for row in rows:
-        event_id, title, summary, source_url, pub_date, risk, sentiment = row
+        event_id = row["id"]
+        title = row["title"]
+        summary = row["summary"]
+        source_url = row["source_url"]
+        pub_date = row["published_date"]
+        risk = row["risk_level"]
+        sentiment = row["sentiment"]
         priority, score = _score_event(title, summary or "", source_url or "")
 
         if priority == "BLOCK":
@@ -171,9 +239,9 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     p0_events.sort(key=lambda x: x["_score"], reverse=True)
     p1_events.sort(key=lambda x: x["_score"], reverse=True)
 
-    # 硬性截断
-    p0_events = p0_events[:10]
-    p1_events = p1_events[:3]
+    # 硬性截断（调整后：P0: 15条, P1: 5条，更多硬核技术内容得以保留）
+    p0_events = p0_events[:15]
+    p1_events = p1_events[:5]
     # P2 只保留摘要信息，不展开
     p2_brief = [{"title": e["title"], "published_date": e["published_date"]} for e in p2_events[:3]]
 
