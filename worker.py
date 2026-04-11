@@ -26,6 +26,10 @@ celery_app.conf.update(
     task_acks_late=True,
     # Celery Beat 定时任务配置
     beat_schedule={
+        'reset-stuck-tasks': {
+            'task': 'worker.reset_stuck_tasks',
+            'schedule': crontab(minute='*/30'),  # 每30分钟执行
+        },
         'daily-deduplicate': {
             'task': 'worker.deduplicate_entities',
             'schedule': crontab(hour=3, minute=0),  # 每天凌晨3点执行

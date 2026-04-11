@@ -192,5 +192,56 @@ def merge_entities():
     conn.close()
 
 
+def cleanup_orphaned_relationships():
+    """清理孤儿关系：source_id 和 target_id 都不存在于 entities 和 events 表中的记录"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # 找出真正的孤儿关系（两端都不在任何有效表中）
+        c.execute("""
+            SELECT r.id, r.source_id, r.target_id, r.relation_type
+            FROM relationships r
+            WHERE NOT EXISTS (SELECT 1 FROM entities WHERE id = r.source_id)
+              AND NOT EXISTS (SELECT 1 FROM events WHERE id = r.source_id)
+              AND NOT EXISTS (SELECT 1 FROM entities WHERE id = r.target_id)
+              AND NOT EXISTS (SELECT 1 FROM events WHERE id = r.target_id)
+        """)
+        orphans = c.fetchall()
+        orphan_ids = [r["id"] for r in orphans]
+        if orphan_ids:
+            # 用字符串拼接避免 f-string 对 %s 的格式化干扰
+            ph = '(' + ','.join(['%s'] * len(orphan_ids)) + ')'
+            c.execute("DELETE FROM relationships WHERE id IN " + ph, orphan_ids)
+            conn.commit()
+            print(f"🗑️ [孤儿清理] 已删除 {len(orphan_ids)} 条双侧孤儿关系")
+        else:
+            print("✅ [孤儿清理] 双侧孤儿: 0")
+        
+        # 同时处理一端孤儿的情况：只source或只target无效
+        for side in ['source_id', 'target_id']:
+            c.execute(f"""
+                SELECT r.id, r.{side}
+                FROM relationships r
+                WHERE NOT EXISTS (SELECT 1 FROM entities WHERE id = r.{side})
+                  AND NOT EXISTS (SELECT 1 FROM events WHERE id = r.{side})
+            """)
+            half_orphans = c.fetchall()
+            if half_orphans:
+                oid_list = [r["id"] for r in half_orphans]
+                ph = '(' + ','.join(['%s'] * len(oid_list)) + ')'
+                c.execute("DELETE FROM relationships WHERE id IN " + ph, oid_list)
+                conn.commit()
+                print(f"🗑️ [孤儿清理] 已删除 {len(oid_list)} 条单侧孤儿关系 ({side})")
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ [孤儿清理] 失败: {e}")
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
-    merge_entities()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "cleanup-orphans":
+        cleanup_orphaned_relationships()
+    else:
+        merge_entities()
