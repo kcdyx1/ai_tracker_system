@@ -112,7 +112,7 @@ def reset_stuck_tasks():
             UPDATE task_queue
             SET status = 'pending', error_message = 'auto-reset: stuck in processing > 30min'
             WHERE status = 'processing'
-            AND created_at < NOW() - INTERVAL '30 minutes'
+            AND created_at::timestamp < NOW() - INTERVAL '30 minutes'
         """)
         conn.commit()
         count = cursor.rowcount

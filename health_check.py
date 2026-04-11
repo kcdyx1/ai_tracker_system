@@ -121,7 +121,7 @@ def check_task_queue() -> dict:
         c = conn.cursor()
         c.execute("SELECT status, COUNT(*) FROM task_queue GROUP BY status")
         rows = c.fetchall()
-        c.execute("SELECT COUNT(*) FROM task_queue WHERE created_at >= CURRENT_DATE")
+        c.execute("SELECT COUNT(*) FROM task_queue WHERE created_at::date >= CURRENT_DATE")
         today = c.fetchone()["count"]
         c.execute("SELECT COUNT(*) FROM task_queue WHERE status = 'failed'")
         failed = c.fetchone()["count"]
