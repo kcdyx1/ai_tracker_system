@@ -439,7 +439,7 @@ async def export_data(format: str = "json", entity_type: str = None, days: int =
                 data_dict = dict(row) if isinstance(row, dict) else {"source_id": row[0], "target_id": row[1], "relation_type": row[2], "evidence": row[3]}
                 result["relationships"].append(data_dict)
 
-            cursor.execute("SELECT id, title, date, published_date, summary, source_url, risk_level, sentiment FROM events WHERE date::timestamp >= %s", (time_threshold,))
+            cursor.execute("SELECT id, title, date, published_date, summary, source_url, risk_level, sentiment FROM events WHERE date >= %s", (time_threshold,))
             for row in cursor.fetchall():
                 data_dict = dict(row) if isinstance(row, dict) else {"id": row[0], "title": row[1], "date": row[2], "published_date": row[3], "summary": row[4], "source_url": row[5], "risk_level": row[6], "sentiment": row[7]}
                 result["events"].append(data_dict)

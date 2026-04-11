@@ -48,15 +48,15 @@ def _format_dt(dt):
     if isinstance(dt, str):
         s = dt.strip()
         try:
-            if s.endswith("+00:00"):
-                dt = datetime.fromisoformat(s)
-            else:
-                dt = datetime.fromisoformat(s.replace("+00:00", ""))
-                dt = dt.replace(tzinfo=timezone.utc)
+            # fromisoformat handles any offset (+00:00, +08:00, -05:00, Z) correctly
+            dt = datetime.fromisoformat(s)
+            # Convert to UTC using astimezone (NOT replace, which just swaps tz without converting time)
+            dt = dt.astimezone(timezone.utc)
             return dt.isoformat()
         except ValueError:
             return dt
     if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+        # Naive datetime: treat as local time, convert to UTC
         dt = dt.replace(tzinfo=timezone.utc)
     elif hasattr(dt, "tzinfo") and dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc)
