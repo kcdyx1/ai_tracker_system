@@ -35,6 +35,17 @@ if env_file.exists():
 
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 
+# ── RSSHub 健康检查 ────────────────────────────────────────────────────────
+def _check_rsshub_health() -> bool:
+    """检查本地 RSSHub (port 1200) 是否可达"""
+    import requests as req
+    try:
+        r = req.get("http://127.0.0.1:1200/", timeout=5)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 # ── 告警阈值配置 ────────────────────────────────────────────────────────────
 STALE_WARNING_DAYS = int(os.getenv("WATCHDOG_WARNING_DAYS", "7"))   # 7天未更新 → warning
 STALE_CRITICAL_DAYS = int(os.getenv("WATCHDOG_CRITICAL_DAYS", "14"))  # 14天 → critical
@@ -207,6 +218,8 @@ def check_feed_health(feeds: dict, metadata: dict, health: dict) -> dict:
             }
             continue
 
+        fail_count = consecutive.get(url, 0)
+
         # 判断状态
         if days >= STALE_CRITICAL_DAYS:
             status = "critical"
@@ -215,15 +228,19 @@ def check_feed_health(feeds: dict, metadata: dict, health: dict) -> dict:
         else:
             status = "ok"
             # 恢复 → 重置连续失败计数
-            if consecutive.get(url, 0) > 0:
+            if fail_count > 0:
                 consecutive[url] = 0
+
+        # 连续失败 >= 5 次 → 标记为 degraded（自动降级）
+        if fail_count >= 5:
+            status = "degraded"
 
         results[url] = {
             **info,
             "status": status,
             "days": round(days, 1),
             "last_crawl": last_crawl,
-            "consecutive_failures": consecutive.get(url, 0),
+            "consecutive_failures": fail_count,
         }
 
     return results
@@ -332,6 +349,12 @@ def run_watchdog(check_only: bool = False):
     log("🔍 Watchdog 健康检查启动")
     log(f"   阈值: warning={STALE_WARNING_DAYS}天, critical={STALE_CRITICAL_DAYS}天")
     log("=" * 60)
+
+    # 检查 RSSHub 健康状态
+    if not _check_rsshub_health():
+        log("⚠️  RSSHub (127.0.0.1:1200) 不可达，aggregated tier 抓取将受影响")
+    else:
+        log("✅ RSSHub 健康检查通过")
 
     feeds = load_feeds()
     metadata = load_metadata()

@@ -558,11 +558,19 @@ class RSSCollector(BaseCollector):
         if not url:
             return []
         logger.info(f"  📡 抓取 RSS: {self.name}")
+        DEFAULT_TIMEOUT = (5, 15)
         try:
-            response = requests.get(url, timeout=30, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0)"
+            response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
             })
             response.raise_for_status()
+        except requests.exceptions.SSLError:
+            logger.warning(f"SSL error for {url}, retrying with verify=False")
+            response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
+            }, verify=False)
+
+        try:
             feed = feedparser.parse(response.content)
             items = []
             for entry in feed.entries:
@@ -583,7 +591,7 @@ class RSSCollector(BaseCollector):
             logger.info(f"    ✅ 获取 {len(items)} 条 RSS 条目")
             return self.filter_items(items)
         except Exception as e:
-            logger.error(f"    ❌ RSS 抓取失败: {e}")
+            logger.error(f"    ❌ RSS 解析失败: {e}")
             return []
 
 
