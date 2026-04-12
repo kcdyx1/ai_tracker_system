@@ -408,10 +408,100 @@ def run_watchdog(check_only: bool = False):
     }
     save_health(health)
 
+    # P2-3: 检查关系失联
+    try:
+        stale = _check_stale_relationships()
+        if stale:
+            log("🕰️ 发现 " + str(len(stale)) + " 个关系超过" + str(STALE_RELATIONSHIP_DAYS) + "天无新事件")
+            if not check_only:
+                _send_stale_relationship_alert(stale)
+        else:
+            log("🕰️ 关系活跃度正常")
+    except Exception as e:
+        log("🕰️ 关系活跃度检查异常: " + str(e))
+
     log("✅ 本次检查完成")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
+# ── P2-3: 关键变更告警 ────────────────────────────────────────────────────────
+STALE_RELATIONSHIP_DAYS = 30
+
+
+def _check_stale_relationships() -> list:
+    """检查超过30天无新事件的实体关系"""
+    from database_pg import get_connection
+    from datetime import datetime, timezone, timedelta
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=STALE_RELATIONSHIP_DAYS)).strftime("%Y-%m-%d")
+
+    cur.execute("""
+        SELECT r.source_id, r.target_id, r.relation_type, r.last_event_date,
+               e1.name as source_name, e2.name as target_name
+        FROM relationships r
+        LEFT JOIN entities e1 ON r.source_id = e1.id
+        LEFT JOIN entities e2 ON r.target_id = e2.id
+        WHERE r.last_event_date IS NULL OR r.last_event_date < %s
+        ORDER BY r.last_event_date NULLS FIRST
+        LIMIT 30
+    """, (cutoff,))
+
+    stale = []
+    for row in cur.fetchall():
+        last_date = row["last_event_date"]
+        if last_date:
+            try:
+                dt_last = datetime.fromisoformat(last_date.replace("Z", "+00:00"))
+                days_since = (datetime.now(timezone.utc) - dt_last).days
+            except:
+                days_since = 999
+        else:
+            days_since = 999
+
+        stale.append({
+            "source_id": row["source_id"],
+            "target_id": row["target_id"],
+            "relation_type": row["relation_type"],
+            "source_name": row["source_name"] or row["source_id"],
+            "target_name": row["target_name"] or row["target_id"],
+            "last_event_date": last_date,
+            "days": days_since,
+        })
+
+    conn.close()
+    return stale
+
+
+def _send_stale_relationship_alert(stale_list: list):
+    """发送关系失联告警到飞书"""
+    if not stale_list or not FEISHU_WEBHOOK_URL:
+        return
+
+    nl = chr(10)  # literal newline
+    lines = []
+    lines.append(nl + "**关系失联告警**（实体超过30天无新事件）" + nl)
+    lines.append("| 实体 | 关系 | 另一方 | 最后事件 | 失联天数 |")
+    lines.append("|---|---|---|---|---|")
+
+    for item in stale_list[:15]:
+        last = item["last_event_date"] or "从未记录"
+        lines.append(
+            "| " + item["source_name"] + " | " + item["relation_type"] + " "
+            "| " + item["target_name"] + " | " + last + " | " + str(item["days"]) + "天 |"
+        )
+
+    body = nl.join(lines)
+    alert_level = "warning" if len(stale_list) < 10 else "critical"
+    send_feishu_alert(
+        "⚠️ " + str(len(stale_list)) + " 个关系超过30天无新动态",
+        body,
+        alert_level=alert_level
+    )
+
+
+
 if __name__ == "__main__":
     import argparse
 

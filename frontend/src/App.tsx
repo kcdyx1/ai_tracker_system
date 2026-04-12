@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, BookOpen, Star, GitFork, ExternalLink, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap, Terminal, CheckCircle, RefreshCw, Play, Square, AlertCircle, Circle } from 'lucide-react'
+import { Activity, Database, Network, MessageSquare, Layers, Calendar, Building2, Package, UserIcon, AlertTriangle, TrendingUp, Send, Bot, UploadCloud, Link, FileText, BookOpen, Star, GitFork, ExternalLink, CheckCircle2, XCircle, Clock, Loader2, Search, Eye, Zap, Terminal, CheckCircle, RefreshCw,  AlertCircle, Circle } from 'lucide-react'
 import axios from 'axios'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
@@ -1179,51 +1179,61 @@ const RepositoriesDashboard = () => {
 // ============================================================================
 // 组件: 🖥️ 系统运维 (SysOps) - 日志查看 & 服务控制
 // ============================================================================
-const SysOps = () => {
-  const [selectedLog, setSelectedLog] = useState<string>("ai-celery")
+const SysOps = ({ activeTab }: { activeTab: string }) => {
+  const [selectedLog, setSelectedLog] = useState<string>('ai-celery')
   const [logLines, setLogLines] = useState<string[]>([])
   const [totalLines, setTotalLines] = useState(0)
   const [logLoading, setLogLoading] = useState(false)
   const [healthData, setHealthData] = useState<Record<string, any>>({})
-  // healthLoading tracked via fetch state
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(false)
+  const [logSource, setLogSource] = useState<string>('')
   const logEndRef = useRef<HTMLDivElement>(null)
+  const statusTopRef = useRef<HTMLDivElement>(null)
+  const prevActiveTab = useRef<string>(activeTab)
 
-  // 日志选项：label=显示名，desc=说明，source=来源路径
   const LOG_OPTIONS = [
-    { value: "ai-celery",     label: "AI-Celery",     desc: "Worker 实时日志（systemd journal）", source: "journalctl -u ai-celery" },
-    { value: "celery_worker2", label: "Worker-2",      desc: "第二个 Worker 日志",                   source: "/tmp/celery_worker2.log" },
-    { value: "ai-server",     label: "AI-Server",     desc: "API 服务日志（systemd journal）",     source: "journalctl -u ai-server" },
-    { value: "feeder",        label: "Auto Feeder",   desc: "RSS 采集调度日志",                    source: "feeder.log" },
-    { value: "reporter",       label: "Reporter",       desc: "飞书报告生成日志",                    source: "reporter.log" },
-    { value: "celery_beat",   label: "Celery Beat",   desc: "定时任务调度日志",                    source: "celery_beat.log" },
-    { value: "server",        label: "FastAPI Server", desc: "后端主服务日志",                      source: "server.log" },
+    { value: 'ai-celery',    label: 'AI-Celery Worker',   desc: 'Worker journalctl' },
+    { value: 'ai-server',    label: 'AI-Server',          desc: 'API journalctl' },
+    { value: 'celery-beat', label: 'Celery Beat',        desc: 'Beat journalctl' },
+    { value: 'ai-feeder',   label: 'Auto Feeder',        desc: 'Feeder journalctl' },
+    { value: 'ai-rescue',   label: 'Ghost Rescue',        desc: 'Rescue journalctl' },
+    { value: 'ai-reporter', label: 'Reporter',            desc: 'Reporter journalctl' },
+    { value: 'ai-watchdog', label: 'Watchdog',            desc: 'Watchdog journalctl' },
+    { value: 'rsshub',      label: 'RSSHub',             desc: 'RSSHub Docker' },
   ]
 
   const fetchLogs = useCallback(async () => {
     setLogLoading(true)
     try {
-      const res = await axios.get(`/api/logs?log_name=${selectedLog}&lines=300`)
+      const res = await axios.get(`/api/logs?log_name=${selectedLog}&lines=200`)
       setLogLines(res.data.lines || [])
       setTotalLines(res.data.total_lines || 0)
+      setLogSource(res.data.source || 'unknown')
     } catch (e) {
-      console.error("Failed to fetch logs", e)
       setLogLines([])
+      setLogSource('error')
     } finally {
       setLogLoading(false)
     }
   }, [selectedLog])
 
   const fetchHealth = useCallback(async () => {
-        try {
+    try {
       const res = await axios.get('/api/health')
       setHealthData(res.data || {})
     } catch (e) {
-      console.error("Failed to fetch health", e)
-    } finally {
-          }
+      console.error('Failed to fetch health', e)
+    }
   }, [])
+
+  useEffect(() => {
+    if (prevActiveTab.current !== 'sys' && activeTab === 'sys') {
+      statusTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    prevActiveTab.current = activeTab
+  }, [activeTab])
 
   useEffect(() => { fetchHealth() }, [fetchHealth])
   useEffect(() => {
@@ -1231,19 +1241,23 @@ const SysOps = () => {
     return () => clearInterval(interval)
   }, [fetchHealth])
 
-  useEffect(() => { fetchLogs() }, [fetchLogs])
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [logLines])
+    if (!autoRefreshLogs) return
+    fetchLogs()
+    const interval = setInterval(fetchLogs, 10000)
+    return () => clearInterval(interval)
+  }, [autoRefreshLogs, fetchLogs])
+
+  useEffect(() => { fetchLogs() }, [fetchLogs])
 
   const restartWorker = async () => {
-    setActionLoading("restart-worker")
+    setActionLoading('restart-worker')
     setActionResult(null)
     try {
-      const res = await axios.post("/api/service/worker/restart")
-      setActionResult(res.data.success ? `Worker 重启成功，PIDs: ${res.data.pids?.join(", ")}` : `Worker 重启失败`)
+      const res = await axios.post('/api/service/worker/restart')
+      setActionResult(res.data.success ? `Worker restarted, PIDs: ${res.data.pids?.join(', ')}` : 'Worker restart failed')
     } catch (e: any) {
-      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+      setActionResult(`Error: ${e.response?.data?.detail || e.message}`)
     } finally {
       setActionLoading(null)
       fetchHealth()
@@ -1251,222 +1265,258 @@ const SysOps = () => {
     }
   }
 
-  const startWorker = async () => {
-    setActionLoading("start-worker")
-    setActionResult(null)
-    try {
-      const res = await axios.post("/api/service/worker/start")
-      setActionResult(res.data.success ? `Worker 启动成功，PIDs: ${res.data.pids?.join(", ")}` : `Worker 启动失败`)
-    } catch (e: any) {
-      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
-    } finally {
-      setActionLoading(null)
-      fetchHealth()
-    }
-  }
-
-  const stopWorker = async () => {
-    setActionLoading("stop-worker")
-    setActionResult(null)
-    try {
-      const res = await axios.post("/api/service/worker/stop")
-      setActionResult(res.data.success ? "Worker 已停止" : "Worker 停止失败")
-    } catch (e: any) {
-      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
-    } finally {
-      setActionLoading(null)
-      fetchHealth()
-    }
-  }
-
   const runFeeder = async () => {
-    setActionLoading("run-feeder")
+    setActionLoading('run-feeder')
     setActionResult(null)
     try {
-      const res = await axios.post("/api/feeder/run")
-      setActionResult(res.data.success ? `Feeder 已触发 (PID: ${res.data.pid})` : res.data.output)
+      const res = await axios.post('/api/feeder/run')
+      setActionResult(res.data.success ? `Feeder triggered (PID: ${res.data.pid})` : res.data.output)
     } catch (e: any) {
-      setActionResult(`错误: ${e.response?.data?.detail || e.message}`)
+      setActionResult(`Error: ${e.response?.data?.detail || e.message}`)
     } finally {
       setActionLoading(null)
     }
   }
 
   const isLoading = (action: string) => actionLoading === action
-  const currentLog = LOG_OPTIONS.find(o => o.value === selectedLog)
 
-  const aiTrackerServices = healthData.services
-    ? Object.entries(healthData.services).filter(([k]) =>
-        ["ai_server", "ai_celery", "docker_redis", "rsshub"].includes(k))
-    : []
+  const StatusBadge = ({ status }: { status: string }) => {
+    if (status === 'healthy' || status === 'ok') return <span className='inline-flex items-center gap-1 text-xs text-emerald-400'><CheckCircle className='w-3.5 h-3.5' />正常</span>
+    if (status === 'degraded' || status === 'warning') return <span className='inline-flex items-center gap-1 text-xs text-amber-400'><AlertTriangle className='w-3.5 h-3.5' />降级</span>
+    if (status === 'failed' || status === 'stopped' || status === 'error' || status === 'unhealthy') return <span className='inline-flex items-center gap-1 text-xs text-rose-400'><XCircle className='w-3.5 h-3.5' />异常</span>
+    return <span className='inline-flex items-center gap-1 text-xs text-slate-500'><Circle className='w-3.5 h-3.5' />未知</span>
+  }
 
-  const externalServices = healthData.services
-    ? Object.entries(healthData.services).filter(([k]) =>
-        !["ai_server", "ai_celery", "docker_redis", "rsshub"].includes(k))
-    : []
+  const svcDisplayName: Record<string, string> = {
+    worker: 'Celery Worker', server: 'FastAPI Server', beat: 'Celery Beat',
+    feeder: 'Auto Feeder', rescue: 'Ghost Rescue', watchdog: 'Watchdog',
+    reporter: 'Reporter', mcp: 'MCP Server',
+    redis: 'Redis', neo4j: 'Neo4j Graph', rsshub: 'RSSHub',
+    postgresql: 'PostgreSQL', docker_redis: 'Redis (Docker)',
+    proxy: 'MiniMax 代理',
+  }
 
+  const services = healthData.services || {}
+  const pg = services.postgresql
   const queueCompleted = healthData.task_queue?.counts?.completed || 0
   const queuePending = healthData.task_queue?.counts?.pending || 0
   const queueFailedCount = healthData.task_queue?.failed_count || 0
   const staleCount = healthData.feed_health?.stale_count || 0
-
-  const StatusBadge = ({ status }: { status: string }) => {
-    if (status === "healthy" || status === "ok")
-      return <span className="inline-flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" />正常</span>
-    if (status === "degraded" || status === "warning")
-      return <span className="inline-flex items-center gap-1 text-xs text-amber-400"><AlertTriangle className="w-3.5 h-3.5" />降级</span>
-    if (status === "failed" || status === "stopped" || status === "error")
-      return <span className="inline-flex items-center gap-1 text-xs text-rose-400"><XCircle className="w-3.5 h-3.5" />异常</span>
-    return <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Circle className="w-3.5 h-3.5" />未知</span>
-  }
-
-  const svcName = (k: string) => ({
-    ai_server: "FastAPI Server", ai_celery: "Celery Worker",
-    docker_redis: "Redis", rsshub: "RSSHub",
-    redis: "Redis (Docker)", neo4j: "Neo4j Graph", proxy: "MiniMax 代理",
-  }[k] || k)
+  const workerInfo = healthData.workers
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-
+    <div className='space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700' ref={statusTopRef}>
       <div>
-        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-amber-300">🖥️ 系统运维</h1>
-        <p className="text-slate-400 mt-1 text-sm">AI Tracker System · 实时状态监控 & 运维操作</p>
+        <h1 className='text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-amber-300'>🖥️ 系统运维</h1>
+        <p className='text-slate-400 mt-1 text-sm'>AI Tracker System · 实时状态监控 & 运维操作</p>
+        <p className='text-slate-600 mt-0.5 text-xs'>最后更新: {healthData.timestamp ? new Date(healthData.timestamp).toLocaleTimeString() : '-'}</p>
       </div>
 
-      {/* 三列布局 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-
-        {/* AI Tracker 核心 */}
-        <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5">
-          <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            AI Tracker 核心服务
+      <div className='grid grid-cols-1 lg:grid-cols-2 gap-5'>
+        <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5'>
+          <h3 className='text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2'>
+            <span className='w-2 h-2 rounded-full bg-indigo-400 animate-pulse' />
+            PostgreSQL 数据库
           </h3>
-          <div className="space-y-3">
-            {aiTrackerServices.length === 0 && <div className="text-xs text-slate-500 py-2">加载中...</div>}
-            {aiTrackerServices.map(([key, data]: [string, any]) => (
-              <div key={key} className="flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0">
-                <div>
-                  <div className="text-sm text-slate-200 font-medium">{svcName(key)}</div>
-                  <div className="text-xs text-slate-500">{data?.detail || '-'}</div>
+          {pg ? (
+            <div className='space-y-2'>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='bg-slate-800/50 rounded-lg p-3'>
+                  <div className='text-xs text-slate-500 mb-1'>连接地址</div>
+                  <div className='text-sm text-slate-200 font-mono'>{pg.host || '-'}</div>
                 </div>
-                <StatusBadge status={data?.status || "unknown"} />
+                <div className='bg-slate-800/50 rounded-lg p-3'>
+                  <div className='text-xs text-slate-500 mb-1'>数据库</div>
+                  <div className='text-sm text-slate-200 font-mono'>{pg.database || '-'}</div>
+                </div>
+                <div className='bg-slate-800/50 rounded-lg p-3'>
+                  <div className='text-xs text-slate-500 mb-1'>数据大小</div>
+                  <div className='text-sm text-slate-200 font-mono'>{pg.size_mb ? pg.size_mb + ' MB' : '-'}</div>
+                </div>
+                <div className='bg-slate-800/50 rounded-lg p-3'>
+                  <div className='text-xs text-slate-500 mb-1'>版本</div>
+                  <div className='text-xs text-slate-300 font-mono truncate' title={pg.version}>{pg.version ? pg.version.split(' ')[0] + ' ' + pg.version.split(' ')[1] : '-'}</div>
+                </div>
               </div>
-            ))}
-          </div>
+              {pg.uptime && (
+                <div className='bg-slate-800/50 rounded-lg p-3'>
+                  <div className='text-xs text-slate-500 mb-1'>启动时间</div>
+                  <div className='text-xs text-slate-300'>{pg.uptime ? new Date(pg.uptime).toLocaleString() : '-'}</div>
+                </div>
+              )}
+              <div className='flex items-center justify-between pt-1'>
+                <StatusBadge status={pg.status} />
+                <span className='text-xs text-slate-600 font-mono'>{pg.detail || ''}</span>
+              </div>
+            </div>
+          ) : (
+            <div className='text-xs text-slate-500 py-4 text-center'>加载中...</div>
+          )}
         </div>
 
-        {/* 外部依赖 */}
-        <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5">
-          <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <ExternalLink className="w-4 h-4 text-slate-500 mr-1" />
-            外部依赖服务
-          </h3>
-          <div className="space-y-3">
-            {externalServices.length === 0 && <div className="text-xs text-slate-500 py-2">加载中...</div>}
-            {externalServices.map(([key, data]: [string, any]) => (
-              <div key={key} className="flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0">
-                <div className="min-w-0">
-                  <div className="text-sm text-slate-200 font-medium">{svcName(key)}</div>
-                  <div className="text-xs text-slate-500 truncate max-w-[160px]" title={data?.detail}>{data?.detail || '-'}</div>
-                </div>
-                <StatusBadge status={data?.status || "unknown"} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 任务队列 & 操作 */}
-        <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5">
-          <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <Layers className="w-4 h-4 text-cyan-400 mr-1" />
+        <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5'>
+          <h3 className='text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2'>
+            <Layers className='w-4 h-4 text-cyan-400 mr-1' />
             任务队列 & Workers
           </h3>
-
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            <div className="text-center p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
-              <div className="text-lg font-bold text-emerald-400">{queueCompleted}</div>
-              <div className="text-xs text-slate-500">完成</div>
+          <div className='grid grid-cols-3 gap-2 mb-4'>
+            <div className='text-center p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10'>
+              <div className='text-lg font-bold text-emerald-400'>{queueCompleted}</div>
+              <div className='text-xs text-slate-500'>完成</div>
             </div>
-            <div className="text-center p-2 rounded-lg bg-amber-500/5 border border-amber-500/10">
-              <div className="text-lg font-bold text-amber-400">{queuePending}</div>
-              <div className="text-xs text-slate-500">等待</div>
+            <div className='text-center p-2 rounded-lg bg-amber-500/5 border border-amber-500/10'>
+              <div className='text-lg font-bold text-amber-400'>{queuePending}</div>
+              <div className='text-xs text-slate-500'>等待</div>
             </div>
-            <div className="text-center p-2 rounded-lg bg-rose-500/5 border border-rose-500/10">
-              <div className="text-lg font-bold text-rose-400">{queueFailedCount}</div>
-              <div className="text-xs text-slate-500">失败</div>
+            <div className='text-center p-2 rounded-lg bg-rose-500/5 border border-rose-500/10'>
+              <div className='text-lg font-bold text-rose-400'>{queueFailedCount}</div>
+              <div className='text-xs text-slate-500'>失败</div>
             </div>
           </div>
-
-          <div className="flex items-center justify-between mb-4 py-2 border-b border-slate-800">
-            <span className="text-sm text-slate-400">RSS Feeds 失联</span>
+          <div className='flex items-center justify-between mb-3 py-2 border-b border-slate-800'>
+            <span className='text-sm text-slate-400'>Celery Workers</span>
+            <div className='flex items-center gap-2'>
+              <StatusBadge status={workerInfo?.status || 'unknown'} />
+              <span className='text-xs text-slate-500'>{workerInfo?.detail || '-'}</span>
+            </div>
+          </div>
+          <div className='flex items-center justify-between mb-3 py-2 border-b border-slate-800'>
+            <span className='text-sm text-slate-400'>RSS Feeds 失联</span>
             <span className={`text-sm font-bold ${staleCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
               {staleCount} / {healthData.feed_health?.total_monitored || 0}
             </span>
           </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={restartWorker} disabled={isLoading("restart-worker")}
-              className="flex items-center justify-center px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 transition-all text-xs disabled:opacity-40">
-              {isLoading("restart-worker") ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              <span className="ml-1.5">重启</span>
+          <div className='grid grid-cols-2 gap-2'>
+            <button onClick={restartWorker} disabled={isLoading('restart-worker')}
+              className='flex items-center justify-center px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 transition-all text-xs disabled:opacity-40'>
+              {isLoading('restart-worker') ? <Loader2 className='w-4 h-4 animate-spin' /> : <RefreshCw className='w-4 h-4' />}
+              <span className='ml-1.5'>重启 Worker</span>
             </button>
-            <button onClick={startWorker} disabled={isLoading("start-worker")}
-              className="flex items-center justify-center px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 transition-all text-xs disabled:opacity-40">
-              {isLoading("start-worker") ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              <span className="ml-1.5">启动</span>
-            </button>
-            <button onClick={stopWorker} disabled={isLoading("stop-worker")}
-              className="flex items-center justify-center px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 transition-all text-xs disabled:opacity-40">
-              {isLoading("stop-worker") ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-              <span className="ml-1.5">停止</span>
-            </button>
-            <button onClick={runFeeder} disabled={isLoading("run-feeder")}
-              className="flex items-center justify-center px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/20 transition-all text-xs disabled:opacity-40">
-              {isLoading("run-feeder") ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-              <span className="ml-1.5">触发 Feeder</span>
+            <button onClick={runFeeder} disabled={isLoading('run-feeder')}
+              className='flex items-center justify-center px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/20 transition-all text-xs disabled:opacity-40'>
+              {isLoading('run-feeder') ? <Loader2 className='w-4 h-4 animate-spin' /> : <Zap className='w-4 h-4' />}
+              <span className='ml-1.5'>触发 Feeder</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* 操作结果 */}
+      <div className='grid grid-cols-1 lg:grid-cols-3 gap-5'>
+        <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5'>
+          <h3 className='text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2'>
+            <span className='w-2 h-2 rounded-full bg-cyan-400 animate-pulse' />
+            AI Tracker 核心服务
+          </h3>
+          <div className='space-y-2'>
+            {[{k: 'worker', label: 'Celery Worker'}, {k: 'server', label: 'FastAPI Server'}, {k: 'beat', label: 'Celery Beat'}].map(({k, label}) => {
+              const s = services[k]
+              return s ? (
+                <div key={k} className='flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0'>
+                  <div className='min-w-0'>
+                    <div className='text-sm text-slate-200'>{label}</div>
+                    <div className='text-xs text-slate-500 truncate max-w-[140px]'>{s.detail || '-'}</div>
+                  </div>
+                  <StatusBadge status={s.status || 'unknown'} />
+                </div>
+              ) : null
+            })}
+          </div>
+        </div>
+
+        <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5'>
+          <h3 className='text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2'>
+            <ExternalLink className='w-4 h-4 text-slate-500 mr-1' />
+            外部依赖服务
+          </h3>
+          <div className='space-y-2'>
+            {[{k: 'redis', label: 'Redis'}, {k: 'neo4j', label: 'Neo4j Graph'}, {k: 'rsshub', label: 'RSSHub'}, {k: 'proxy', label: 'MiniMax 代理'}].map(({k, label}) => {
+              const s = services[k]
+              return s ? (
+                <div key={k} className='flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0'>
+                  <div className='min-w-0'>
+                    <div className='text-sm text-slate-200'>{label}</div>
+                    <div className='text-xs text-slate-500 truncate max-w-[140px]' title={s.host || ''}>{s.host || (s.detail ? s.detail.slice(0, 30) : '-')}</div>
+                  </div>
+                  <StatusBadge status={s.status || 'unknown'} />
+                </div>
+              ) : null
+            })}
+          </div>
+        </div>
+
+        <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl p-5'>
+          <h3 className='text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2'>
+            <span className='w-2 h-2 rounded-full bg-slate-500' />
+            其他服务
+          </h3>
+          <div className='space-y-2'>
+            {[{k: 'feeder', label: 'Auto Feeder'}, {k: 'rescue', label: 'Ghost Rescue'}, {k: 'watchdog', label: 'Watchdog'}, {k: 'reporter', label: 'Reporter'}, {k: 'mcp', label: 'MCP Server'}].map(({k, label}) => {
+              const s = services[k]
+              return s ? (
+                <div key={k} className='flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0'>
+                  <div className='min-w-0'>
+                    <div className='text-sm text-slate-200'>{label}</div>
+                    <div className='text-xs text-slate-500'>{s.detail || '-'}</div>
+                  </div>
+                  <StatusBadge status={s.status || 'unknown'} />
+                </div>
+              ) : null
+            })}
+            {Object.keys(services).filter(k => !['worker','server','beat','feeder','rescue','watchdog','reporter','mcp','redis','neo4j','rsshub','postgresql','proxy','docker_redis'].includes(k)).map(k => {
+              const s = services[k]
+              return s ? (
+                <div key={k} className='flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0'>
+                  <div className='min-w-0'>
+                    <div className='text-sm text-slate-200'>{svcDisplayName[k] || k}</div>
+                    <div className='text-xs text-slate-500'>{s.detail || '-'}</div>
+                  </div>
+                  <StatusBadge status={s.status || 'unknown'} />
+                </div>
+              ) : null
+            })}
+          </div>
+        </div>
+      </div>
+
       {actionResult && (
-        <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-800/80 border border-slate-700 text-sm">
-          <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-          <code className="font-mono text-xs text-slate-300">{actionResult}</code>
+        <div className='flex items-center gap-3 p-4 rounded-xl bg-slate-800/80 border border-slate-700 text-sm'>
+          <CheckCircle className='w-4 h-4 text-emerald-400 flex-shrink-0' />
+          <code className='font-mono text-xs text-slate-300'>{actionResult}</code>
         </div>
       )}
 
-      {/* 日志查看器 */}
-      <div className="backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl overflow-hidden">
-        <div className="p-5 border-b border-slate-700/50">
-          <div className="flex items-start justify-between flex-wrap gap-4">
+      <div className='backdrop-blur-md bg-slate-900/40 border border-slate-700/50 rounded-2xl overflow-hidden'>
+        <div className='p-5 border-b border-slate-700/50'>
+          <div className='flex items-start justify-between flex-wrap gap-4'>
             <div>
-              <h3 className="text-base font-semibold text-slate-200 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-orange-400" />
+              <h3 className='text-base font-semibold text-slate-200 flex items-center gap-2'>
+                <FileText className='w-5 h-5 text-orange-400' />
                 日志查看器
               </h3>
-              {currentLog && (
-                <div className="mt-2 text-xs text-slate-500 space-y-0.5">
-                  <div className="text-slate-400">{currentLog.desc}</div>
-                  <div className="font-mono text-slate-600">source: {currentLog.source}</div>
-                </div>
-              )}
+              <div className='mt-2 text-xs text-slate-500 flex items-center gap-3'>
+                <span>来源: <span className='text-orange-300 font-mono'>{logSource}</span></span>
+                <span>共 {totalLines} 行</span>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className='flex items-center gap-3'>
+              <button
+                onClick={() => setAutoRefreshLogs(v => !v)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border transition-all ${autoRefreshLogs ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
+              >
+                {autoRefreshLogs ? <RefreshCw className='w-3.5 h-3.5 animate-spin' /> : <RefreshCw className='w-3.5 h-3.5' />}
+                10s 自动刷新
+              </button>
               <select
                 value={selectedLog}
-                onChange={e => setSelectedLog(e.target.value)}
-                className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-orange-500 outline-none min-w-[200px]"
+                onChange={e => { setSelectedLog(e.target.value); setAutoRefreshLogs(false) }}
+                className='bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-orange-500 outline-none min-w-[200px]'
               >
                 {LOG_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
               <button onClick={fetchLogs} disabled={logLoading}
-                className="flex items-center px-4 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 transition-all text-sm">
+                className='flex items-center px-4 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 transition-all text-sm'>
                 <RefreshCw className={`w-4 h-4 mr-2 ${logLoading ? 'animate-spin' : ''}`} />
                 刷新
               </button>
@@ -1474,30 +1524,37 @@ const SysOps = () => {
           </div>
         </div>
 
-        <div className="p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-slate-500 font-mono">共 {totalLines} 行 · 显示最近 300 行</span>
-            <span className="text-xs text-slate-600">
-              {selectedLog === "ai-celery" || selectedLog === "ai-server" ? "实时 journalctl" : "静态日志文件"}
+        <div className='p-5'>
+          <div className='flex items-center justify-between mb-3'>
+            <span className='text-xs text-slate-500 font-mono'>显示最近 200 行</span>
+            <span className={`text-xs px-2 py-0.5 rounded-full ${logSource === 'journalctl' ? 'bg-blue-500/10 text-blue-400' : logSource === 'docker' ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-700 text-slate-500'}`}>
+              {logSource === 'journalctl' ? 'systemd journal' : logSource === 'docker' ? 'docker logs' : logSource || 'file'}
             </span>
           </div>
-          <div className="bg-slate-950 rounded-xl p-4 h-[28rem] overflow-y-auto font-mono text-xs leading-relaxed border border-slate-800">
+          <div className='bg-slate-950 rounded-xl p-4 h-[28rem] overflow-y-auto font-mono text-xs leading-relaxed border border-slate-800'>
             {logLoading ? (
-              <div className="flex items-center justify-center h-full text-slate-500">
-                <Loader2 className="w-6 h-6 animate-spin mr-2" /> 加载中...
+              <div className='flex items-center justify-center h-full text-slate-500'>
+                <Loader2 className='w-6 h-6 animate-spin mr-2' /> 加载中...
               </div>
             ) : logLines.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-slate-500">
-                <AlertCircle className="w-5 h-5 mr-2" /> 暂无日志内容
+              <div className='flex flex-col items-center justify-center h-full text-slate-500 gap-2'>
+                <AlertCircle className='w-5 h-5' />
+                <span>暂无日志内容（{logSource === 'journalctl' ? 'journalctl 无返回' : '文件为空或不存在'}）</span>
               </div>
             ) : (
               logLines.map((line, i) => {
-                let color = "text-slate-400"
-                if (line.includes("ERROR") || line.includes("❌") || line.includes("failed") || line.includes("Failed")) color = "text-rose-400"
-                else if (line.includes("WARNING") || line.includes("⚠️")) color = "text-amber-400"
-                else if (line.includes("✅") || line.includes("200 OK")) color = "text-emerald-400"
-                else if (line.includes("HTTP Request")) color = "text-cyan-400"
-                return <div key={i} className={`py-0.5 break-all ${color}`}>{line}</div>
+                let color = 'text-slate-400'
+                const tsMatch = line.match(/^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/)
+                if (line.includes('ERROR') || line.includes('❌') || line.includes('failed') || line.includes('Failed')) color = 'text-rose-400'
+                else if (line.includes('WARNING') || line.includes('⚠️')) color = 'text-amber-400'
+                else if (line.includes('✅') || line.includes('200 OK') || line.includes('succeeded')) color = 'text-emerald-400'
+                else if (line.includes('HTTP Request')) color = 'text-cyan-400'
+                return (
+                  <div key={i} className={`py-0.5 break-all ${color}`}>
+                    {tsMatch && <span className='text-slate-600 mr-2'>{tsMatch[1]}</span>}
+                    {line.replace(tsMatch ? tsMatch[0] : '', '').trim()}
+                  </div>
+                )
               })
             )}
             <div ref={logEndRef} />
@@ -1505,9 +1562,9 @@ const SysOps = () => {
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-slate-600">
-        <span>健康检查最后更新: {healthData.timestamp ? new Date(healthData.timestamp).toLocaleTimeString() : '-'}</span>
-        <span>每 30 秒自动刷新</span>
+      <div className='flex items-center justify-between text-xs text-slate-600'>
+        <span>健康检查每 30 秒自动刷新</span>
+        <span>日志 {autoRefreshLogs ? '每 10 秒自动刷新' : '手动刷新'}</span>
       </div>
     </div>
   )
@@ -1554,7 +1611,7 @@ function App() {
         {activeTab === 'repos' && <RepositoriesDashboard />}
         {activeTab === 'graph' && <TacticalGraph />}
         {activeTab === 'chat' && <CopilotChat />}
-        {activeTab === 'sys' && <SysOps />}
+        {activeTab === 'sys' && <SysOps activeTab={activeTab} />}
       </main>
         {/* 📱 移动端专属底部导航栏 (只在手机屏幕显示) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 z-50 flex justify-around items-center h-16 pb-safe shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">

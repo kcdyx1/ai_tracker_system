@@ -4,32 +4,52 @@ import asyncio
 from pathlib import Path
 from fastapi import HTTPException
 
-LOG_FILES = {
-    "celery_worker": "/tmp/celery_worker.log",
-    "celery_worker2": "/tmp/celery_worker2.log",
-    "feeder": "/home/kangchen/.openclaw/workspace/ai_tracker_system/feeder.log",
-    "reporter": "/home/kangchen/.openclaw/workspace/ai_tracker_system/reporter.log",
-    "server": "/home/kangchen/.openclaw/workspace/ai_tracker_system/server.log",
-    "celery_beat": "/home/kangchen/.openclaw/workspace/ai_tracker_system/celery_beat.log",
-}
+PROJECT_DIR = Path("/home/kangchen/.openclaw/workspace/ai_tracker_system")
 
+# 实际注册的 systemd user service 名称
 SYSTEMD_SERVICES = {
-    "ai-celery": "ai-celery.service",
-    "ai-server": "ai-server.service",
-    "rsshub": "docker-rsshub.service",
+    # 日志选项
+    "ai-celery":    "ai_tracker_ai_tracker_worker.service",
+    "ai-server":     "ai_tracker_ai_tracker_server.service",
+    "celery-beat":   "ai_tracker_ai_tracker_beat.service",
+    "rsshub":        "docker-rsshub.service",
+    # 额外选项（显示用）
+    "ai-feeder":     "ai_tracker_ai_tracker_feeder.service",
+    "ai-rescue":     "ai_tracker_ai_tracker_rescue.service",
+    "ai-watchdog":   "ai_tracker_ai_tracker_watchdog.service",
+    "ai-reporter":   "ai_tracker_ai_tracker_reporter.service",
 }
 
-PROJECT_DIR = "/home/kangchen/.openclaw/workspace/ai_tracker_system"
+LOG_FILES = {
+    "celery_worker":  "/tmp/celery_worker.log",
+    "celery_worker2": "/tmp/celery_worker2.log",
+    "feeder":         "/home/kangchen/.openclaw/workspace/ai_tracker_system/feeder.log",
+    "reporter":       "/home/kangchen/.openclaw/workspace/ai_tracker_system/reporter.log",
+    "server":         "/home/kangchen/.openclaw/workspace/ai_tracker_system/server.log",
+    "celery_beat":    "/home/kangchen/.openclaw/workspace/ai_tracker_system/celery_beat.log",
+}
+
+# journalctl 实际用户服务
+USER_JOURNAL_SERVICES = {
+    "ai-celery":    "ai_tracker_ai_tracker_worker.service",
+    "ai-server":    "ai_tracker_ai_tracker_server.service",
+    "celery-beat":  "ai_tracker_ai_tracker_beat.service",
+    "ai-feeder":    "ai_tracker_ai_tracker_feeder.service",
+    "ai-rescue":    "ai_tracker_ai_tracker_rescue.service",
+    "ai-watchdog":  "ai_tracker_ai_tracker_watchdog.service",
+    "ai-reporter":  "ai_tracker_ai_tracker_reporter.service",
+}
+
 
 def register_sys_ops_endpoints(app):
     @app.get("/api/logs")
-    async def get_logs(log_name: str = "celery_worker", lines: int = 100):
-        # journalctl-based logs (systemd services)
-        if log_name in SYSTEMD_SERVICES:
-            svc = SYSTEMD_SERVICES[log_name]
+    async def get_logs(log_name: str = "ai-celery", lines: int = 200):
+        # journalctl-based logs (user systemd services)
+        svc = USER_JOURNAL_SERVICES.get(log_name)
+        if svc:
             try:
                 result = subprocess.run(
-                    ["journalctl", "-u", svc, "-n", str(lines), "--no-pager", "--no-full"],
+                    ["journalctl", "--user", "-u", svc, "-n", str(lines), "--no-pager", "--no-full", "-o", "short-iso"],
                     capture_output=True, text=True, timeout=15
                 )
                 raw_lines = result.stdout.splitlines()
@@ -37,12 +57,33 @@ def register_sys_ops_endpoints(app):
                     "log_name": log_name,
                     "lines": [line.rstrip() for line in raw_lines],
                     "total_lines": len(raw_lines),
+                    "source": "journalctl",
+                    "service": svc,
                     "error": None
                 }
             except subprocess.TimeoutExpired:
-                return {"log_name": log_name, "lines": [], "total_lines": 0, "error": "journalctl timeout"}
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "source": "journalctl", "service": svc, "error": "journalctl timeout"}
             except Exception as e:
-                return {"log_name": log_name, "lines": [], "total_lines": 0, "error": str(e)}
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "source": "journalctl", "service": svc, "error": str(e)}
+
+        # Docker container logs
+        if log_name == "rsshub":
+            try:
+                result = subprocess.run(
+                    ["docker", "logs", "--tail", str(lines), "rsshub"],
+                    capture_output=True, text=True, timeout=10
+                )
+                raw_lines = (result.stdout + result.stderr).splitlines()[-lines:]
+                return {
+                    "log_name": log_name,
+                    "lines": [line.rstrip() for line in raw_lines],
+                    "total_lines": len(raw_lines),
+                    "source": "docker",
+                    "service": "rsshub",
+                    "error": None
+                }
+            except Exception as e:
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "source": "docker", "service": "rsshub", "error": str(e)}
 
         # file-based logs
         log_path = LOG_FILES.get(log_name)
@@ -50,7 +91,7 @@ def register_sys_ops_endpoints(app):
             raise HTTPException(status_code=400, detail=f"Unknown log: {log_name}")
         try:
             if not Path(log_path).exists():
-                return {"log_name": log_name, "lines": [], "total_lines": 0, "error": None}
+                return {"log_name": log_name, "lines": [], "total_lines": 0, "source": "file", "path": log_path, "error": None}
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
             total_lines = len(all_lines)
@@ -59,10 +100,12 @@ def register_sys_ops_endpoints(app):
                 "log_name": log_name,
                 "lines": [line.rstrip() for line in recent_lines],
                 "total_lines": total_lines,
+                "source": "file",
+                "path": log_path,
                 "error": None
             }
         except Exception as e:
-            return {"log_name": log_name, "lines": [], "total_lines": 0, "error": str(e)}
+            return {"log_name": log_name, "lines": [], "total_lines": 0, "source": "file", "path": log_path, "error": str(e)}
 
     @app.get("/api/logs/names")
     async def get_log_names():
@@ -70,22 +113,23 @@ def register_sys_ops_endpoints(app):
         for name, path in LOG_FILES.items():
             exists = Path(path).exists()
             size = Path(path).stat().st_size if exists else 0
-            available[name] = {"exists": exists, "size": size, "path": path}
-        for name, svc in SYSTEMD_SERVICES.items():
-            available[name] = {"exists": True, "size": 0, "path": f"journalctl -u {svc}"}
+            mtime = Path(path).stat().st_mtime if exists else 0
+            available[name] = {"exists": exists, "size": size, "path": path, "mtime": mtime, "source": "file"}
+        for name, svc in USER_JOURNAL_SERVICES.items():
+            available[name] = {"exists": True, "size": 0, "path": f"journalctl --user -u {svc}", "source": "journalctl", "service": svc}
         return available
 
     @app.post("/api/service/control")
     async def control_service(action: str = "status", service_name: str = "ai-celery"):
         if action not in ("start", "stop", "restart", "status"):
             raise HTTPException(status_code=400, detail="action must be start/stop/restart/status")
-        if service_name not in SYSTEMD_SERVICES:
+        svc = USER_JOURNAL_SERVICES.get(service_name)
+        if not svc:
             raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
-        svc = SYSTEMD_SERVICES[service_name]
         try:
             if action == "status":
                 result = subprocess.run(
-                    ["systemctl", "is-active", svc],
+                    ["systemctl", "--user", "is-active", svc],
                     capture_output=True, text=True, timeout=10
                 )
                 return {
@@ -97,7 +141,7 @@ def register_sys_ops_endpoints(app):
                     "error": None
                 }
             result = subprocess.run(
-                ["sudo", "systemctl", action, svc],
+                ["systemctl", "--user", action, svc],
                 capture_output=True, text=True, timeout=30
             )
             return {
@@ -115,92 +159,43 @@ def register_sys_ops_endpoints(app):
 
     @app.post("/api/service/worker/restart")
     async def restart_celery_worker():
+        svc = "ai_tracker_ai_tracker_worker.service"
         try:
-            kill_result = subprocess.run(
-                ["pkill", "-f", "celery.*worker.celery_app"],
-                capture_output=True, text=True, timeout=10
-            )
-            await asyncio.sleep(2)
-            start_result = subprocess.Popen(
-                ["./venv/bin/python", "-m", "celery", "-A", "worker.celery_app", "worker",
-                 "--loglevel=info"],
-                cwd=PROJECT_DIR,
-                stdout=open("/tmp/celery_worker.log", "a"),
-                stderr=subprocess.STDOUT
-            )
-            await asyncio.sleep(2)
-            check = subprocess.run(
-                ["pgrep", "-f", "celery.*worker.celery_app"],
-                capture_output=True, text=True, timeout=5
-            )
+            subprocess.run(["systemctl", "--user", "restart", svc], capture_output=True, timeout=30)
+            await asyncio.sleep(3)
+            check = subprocess.run(["pgrep", "-f", "celery.*worker.celery_app"], capture_output=True, text=True, timeout=5)
             pids = [p for p in check.stdout.strip().split("\n") if p]
-            return {
-                "success": len(pids) > 0,
-                "action": "restart",
-                "pids": pids,
-                "kill_output": kill_result.stdout.strip(),
-                "start_output": str(start_result.pid),
-                "error": None
-            }
+            return {"success": len(pids) > 0, "action": "restart", "pids": pids, "error": None}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/service/worker/start")
     async def start_celery_worker():
+        svc = "ai_tracker_ai_tracker_worker.service"
         try:
-            check = subprocess.run(
-                ["pgrep", "-f", "celery.*worker.celery_app"],
-                capture_output=True, text=True, timeout=5
-            )
-            pids_before = [p for p in check.stdout.strip().split("\n") if p]
-            subprocess.Popen(
-                ["./venv/bin/python", "-m", "celery", "-A", "worker.celery_app", "worker",
-                 "--loglevel=info"],
-                cwd=PROJECT_DIR,
-                stdout=open("/tmp/celery_worker.log", "a"),
-                stderr=subprocess.STDOUT
-            )
+            subprocess.run(["systemctl", "--user", "start", svc], capture_output=True, timeout=30)
             await asyncio.sleep(3)
-            check = subprocess.run(
-                ["pgrep", "-f", "celery.*worker.celery_app"],
-                capture_output=True, text=True, timeout=5
-            )
-            pids_after = [p for p in check.stdout.strip().split("\n") if p]
-            return {
-                "success": len(pids_after) > len(pids_before),
-                "action": "start",
-                "pids": pids_after
-            }
+            check = subprocess.run(["pgrep", "-f", "celery.*worker.celery_app"], capture_output=True, text=True, timeout=5)
+            pids = [p for p in check.stdout.strip().split("\n") if p]
+            return {"success": len(pids) > 0, "action": "start", "pids": pids}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/service/worker/stop")
     async def stop_celery_worker():
+        svc = "ai_tracker_ai_tracker_worker.service"
         try:
-            result = subprocess.run(
-                ["pkill", "-f", "celery.*worker.celery_app"],
-                capture_output=True, text=True, timeout=10
-            )
-            return {
-                "success": result.returncode == 0,
-                "action": "stop",
-                "output": result.stdout.strip()
-            }
+            subprocess.run(["systemctl", "--user", "stop", svc], capture_output=True, timeout=30)
+            return {"success": True, "action": "stop"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/feeder/run")
     async def run_feeder():
+        svc = "ai_tracker_ai_tracker_feeder.service"
         try:
-            lock_file = Path(PROJECT_DIR) / ".auto_feeder.lock"
-            if lock_file.exists():
-                return {"success": False, "output": "auto_feeder already running"}
-            proc = subprocess.Popen(
-                ["./venv/bin/python", "-u", "auto_feeder.py"],
-                cwd=PROJECT_DIR,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-            )
-            return {"success": True, "action": "started", "pid": proc.pid}
+            subprocess.run(["systemctl", "--user", "start", svc], capture_output=True, timeout=10)
+            return {"success": True, "action": "triggered", "service": svc}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

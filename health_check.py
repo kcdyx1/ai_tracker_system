@@ -1,21 +1,11 @@
 #!/usr/bin/env python3
-"""
-统一系统健康检查 - AI Tracker System
-一次性检查所有关键服务的状态
-"""
-
-import subprocess
-import json
-import os
+import subprocess, json, os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 PROJECT_DIR = Path("/home/kangchen/.openclaw/workspace/ai_tracker_system")
-DB_PATH = PROJECT_DIR / "ai_tracker.db"
 FEEDER_METADATA_FILE = PROJECT_DIR / "config" / "feeder_metadata.json"
 
-# Load .env
 env_file = PROJECT_DIR / ".env"
 if env_file.exists():
     for line in env_file.read_text().splitlines():
@@ -26,95 +16,94 @@ if env_file.exists():
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "openclaw2026")
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
 
+PG_HOST = os.environ.get("AI_TRACKER_PG_HOST", "172.20.0.4")
+PG_PORT = int(os.environ.get("AI_TRACKER_PG_PORT", "5432"))
+PG_USER = os.environ.get("POSTGRES_USER", "postgres")
+PG_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "difyai123456")
+PG_DATABASE = os.environ.get("POSTGRES_DB", "ai_tracker")
 
-def check_docker_container(name: str) -> dict:
-    """检查 Docker 容器状态"""
+REDIS_CONTAINER = "docker-redis-1"
+NEO4J_CONTAINER = "ai_tracker_neo4j"
+RSSHUB_CONTAINER = "rsshub"
+
+SYSTEMD_SERVICES = {
+    "worker":   "ai_tracker_ai_tracker_worker.service",
+    "server":   "ai_tracker_ai_tracker_server.service",
+    "beat":     "ai_tracker_ai_tracker_beat.service",
+    "feeder":   "ai_tracker_ai_tracker_feeder.service",
+    "rescue":   "ai_tracker_ai_tracker_rescue.service",
+    "watchdog": "ai_tracker_ai_tracker_watchdog.service",
+    "reporter": "ai_tracker_ai_tracker_reporter.service",
+    "mcp":      "ai_tracker_ai_tracker_mcp.service",
+}
+
+def check_docker_container(name):
     try:
-        result = subprocess.run(
-            ["docker", "ps", "--filter", f"name={name}", "--format", "{{.Status}}"],
-            capture_output=True, text=True, timeout=5
-        )
-        status = result.stdout.strip()
-        if "Up" in status:
-            return {"status": "healthy", "detail": status, "running": True}
-        elif not status:
-            return {"status": "stopped", "detail": "not found", "running": False}
-        else:
-            return {"status": "unhealthy", "detail": status, "running": False}
-    except Exception as e:
-        return {"status": "error", "detail": str(e), "running": False}
+        r = subprocess.run(["docker", "ps", "--filter", "name=" + name, "--format", "{{.Status}}"], capture_output=True, text=True, timeout=5)
+        s = r.stdout.strip()
+        if "Up" in s: return {"status": "healthy", "detail": s, "running": True}
+        elif not s: return {"status": "stopped", "detail": "not found", "running": False}
+        else: return {"status": "unhealthy", "detail": s, "running": False}
+    except Exception as e: return {"status": "error", "detail": str(e), "running": False}
 
-
-def check_systemd_service(name: str) -> dict:
-    """检查 systemd 服务状态"""
+def check_systemd_service(name):
     try:
-        result = subprocess.run(
-            ["systemctl", "is-active", name],
-            capture_output=True, text=True, timeout=5
-        )
-        state = result.stdout.strip()
-        if state == "active":
-            return {"status": "healthy", "detail": state, "running": True}
-        elif state == "failed":
-            return {"status": "failed", "detail": state, "running": False}
-        else:
-            return {"status": "unknown", "detail": state, "running": False}
-    except Exception as e:
-        return {"status": "error", "detail": str(e), "running": False}
+        r = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True, timeout=5)
+        s = r.stdout.strip()
+        if s == "active": return {"status": "healthy", "detail": s, "running": True}
+        elif s == "failed": return {"status": "failed", "detail": s, "running": False}
+        else: return {"status": "unknown", "detail": s, "running": False}
+    except Exception as e: return {"status": "error", "detail": str(e), "running": False}
 
-
-def check_redis() -> dict:
-    """检查 Redis 连接"""
+def check_redis():
     try:
-        result = subprocess.run(
-            ["docker", "exec", "docker-redis-1", "redis-cli", "ping"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.stdout.strip() == "PONG":
-            return {"status": "healthy", "detail": "PONG"}
-        return {"status": "unhealthy", "detail": result.stdout.strip()}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        r = subprocess.run(["docker", "exec", REDIS_CONTAINER, "redis-cli", "ping"], capture_output=True, text=True, timeout=5)
+        if r.stdout.strip() == "PONG": return {"status": "healthy", "detail": "PONG", "host": "docker-redis-1:6379"}
+        return {"status": "unhealthy", "detail": r.stdout.strip(), "host": "docker-redis-1:6379"}
+    except Exception as e: return {"status": "error", "detail": str(e), "host": "docker-redis-1:6379"}
 
-
-def check_neo4j() -> dict:
-    """检查 Neo4j 连接"""
+def check_neo4j():
     try:
-        result = subprocess.run(
-            ["docker", "exec", "ai_tracker_neo4j", "cypher-shell",
-             "-u", "neo4j", "-p", NEO4J_PASSWORD, "-d", "neo4j",
-             "RETURN 1 as n"],
-            capture_output=True, text=True, timeout=8
-        )
-        if "1 row" in result.stdout or result.returncode == 0:
-            return {"status": "healthy", "detail": "connected"}
-        return {"status": "unhealthy", "detail": result.stdout[:100]}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        r = subprocess.run(["docker", "exec", NEO4J_CONTAINER, "cypher-shell", "-u", "neo4j", "-p", NEO4J_PASSWORD, "-d", "neo4j", "RETURN 1 as n"], capture_output=True, text=True, timeout=8)
+        if "1 row" in r.stdout or r.returncode == 0: return {"status": "healthy", "detail": "connected", "host": NEO4J_CONTAINER + ":7687"}
+        return {"status": "unhealthy", "detail": r.stdout[:100], "host": NEO4J_CONTAINER + ":7687"}
+    except Exception as e: return {"status": "error", "detail": str(e), "host": NEO4J_CONTAINER + ":7687"}
 
-
-def check_rss_proxy() -> dict:
-    """检查 MiniMax 代理健康"""
+def check_rss_proxy():
     try:
         import urllib.request
         proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "http://")
-        req = urllib.request.Request(
-            proxy_url + "v1/models",
-            headers={"Authorization": f"Bearer {MINIMAX_API_KEY}"}
-        )
+        req = urllib.request.Request(proxy_url + "v1/models", headers={"Authorization": "Bearer " + MINIMAX_API_KEY})
         resp = urllib.request.urlopen(req, timeout=5)
         data = resp.read().decode()
         if "MiniMax" in data:
             models = json.loads(data).get("data", [])
-            model_names = [m.get("id", "") for m in models]
-            return {"status": "healthy", "detail": f"models: {', '.join(model_names[:3])}"}
-        return {"status": "unknown", "detail": "unexpected response"}
+            names = ", ".join([m.get("id", "") for m in models[:3]])
+            return {"status": "healthy", "detail": "models: " + names, "host": proxy_url.rstrip("/")}
+        return {"status": "unknown", "detail": "unexpected response", "host": proxy_url.rstrip("/")}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "http://")
+        return {"status": "error", "detail": str(e), "host": proxy_url.rstrip("/")}
 
+def check_postgresql():
+    try:
+        import psycopg2
+        conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER, password=PG_PASSWORD, dbname=PG_DATABASE, connect_timeout=5)
+        cur = conn.cursor()
+        cur.execute("SELECT version()")
+        version = cur.fetchone()[0]
+        cur.execute("SELECT pg_postmaster_start_time()")
+        start_time = cur.fetchone()[0]
+        cur.execute("SELECT pg_database_size(%s)", (PG_DATABASE,))
+        db_size = cur.fetchone()[0]
+        conn.close()
+        size_mb = round(db_size / 1024 / 1024, 1)
+        detail = "%s:%d/%s (%.1fMB)" % (PG_HOST, PG_PORT, PG_DATABASE, size_mb)
+        return {"status": "healthy", "host": "%s:%d" % (PG_HOST, PG_PORT), "database": PG_DATABASE, "version": version[:60], "uptime": str(start_time), "size_mb": size_mb, "detail": detail}
+    except Exception as e:
+        return {"status": "error", "host": "%s:%d" % (PG_HOST, PG_PORT), "database": PG_DATABASE, "detail": str(e)}
 
-def check_task_queue() -> dict:
-    """检查任务队列状态"""
+def check_task_queue():
     try:
         from database import get_connection
         conn = get_connection()
@@ -127,44 +116,23 @@ def check_task_queue() -> dict:
         failed = c.fetchone()["count"]
         conn.close()
         counts = {row["status"]: row["count"] for row in rows}
-        return {
-            "status": "healthy" if failed < 50 else "warning",
-            "counts": counts,
-            "today_new": today,
-            "failed_count": failed,
-            "total": sum(counts.values())
-        }
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {"status": "healthy" if failed < 50 else "warning", "counts": counts, "today_new": today, "failed_count": failed, "total": sum(counts.values())}
+    except Exception as e: return {"status": "error", "detail": str(e)}
 
-
-def check_celery_workers() -> dict:
-    """检查 Celery worker 进程"""
+def check_celery_workers():
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "celery.*worker.celery_app", "-c"],
-            capture_output=True, text=True, timeout=5
-        )
-        count = int(result.stdout.strip())
-        if count >= 8:
-            return {"status": "healthy", "detail": f"{count} worker processes", "count": count}
-        elif count >= 2:
-            return {"status": "degraded", "detail": f"only {count} worker processes", "count": count}
-        elif count >= 1:
-            return {"status": "degraded", "detail": f"only {count} worker process", "count": count}
-        else:
-            return {"status": "stopped", "detail": "no workers", "count": 0}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        r = subprocess.run(["pgrep", "-f", "celery.*worker.celery_app", "-c"], capture_output=True, text=True, timeout=5)
+        count = int(r.stdout.strip())
+        if count >= 8: return {"status": "healthy", "detail": str(count) + " workers", "count": count}
+        elif count >= 1: return {"status": "degraded", "detail": str(count) + " worker(s)", "count": count}
+        else: return {"status": "stopped", "detail": "no workers", "count": 0}
+    except Exception as e: return {"status": "error", "detail": str(e)}
 
-
-def check_feed_health() -> dict:
-    """检查 RSS feeds 健康状态"""
+def check_feed_health():
     try:
         metadata = {}
         if FEEDER_METADATA_FILE.exists():
             metadata = json.loads(FEEDER_METADATA_FILE.read_text())
-
         now = datetime.now(timezone.utc)
         stale_feeds = []
         for url, last_crawl in metadata.items():
@@ -174,44 +142,22 @@ def check_feed_health() -> dict:
             try:
                 dt_str = last_crawl.replace("+00:00", "").replace("Z", "")
                 dt = datetime.fromisoformat(dt_str)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
                 days = (now - dt).total_seconds() / 86400
-                if days > 7:
-                    stale_feeds.append({"url": url[:80], "last_crawl": last_crawl[:16], "days": int(days)})
-            except Exception:
-                pass
-
+                if days > 7: stale_feeds.append({"url": url[:80], "last_crawl": last_crawl[:16], "days": int(days)})
+            except: pass
         stale_sorted = sorted(stale_feeds, key=lambda x: x.get("days") or 0, reverse=True)
-        return {
-            "status": "warning" if len(stale_feeds) >= 5 else "healthy" if len(stale_feeds) == 0 else "ok",
-            "total_monitored": len(metadata),
-            "stale_count": len(stale_feeds),
-            "stale_feeds": stale_sorted[:10]
-        }
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {"status": "warning" if len(stale_feeds) >= 5 else "healthy" if len(stale_feeds) == 0 else "ok", "total_monitored": len(metadata), "stale_count": len(stale_feeds), "stale_feeds": stale_sorted[:10]}
+    except Exception as e: return {"status": "error", "detail": str(e)}
 
-
-def get_full_health_report() -> dict:
-    """生成完整的健康报告"""
-    return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "services": {
-            "redis": check_redis(),
-            "neo4j": check_neo4j(),
-            "rsshub": check_docker_container("rsshub"),
-            "docker_redis": check_docker_container("docker-redis-1"),
-            "ai_server": check_systemd_service("ai-server"),
-            "ai_celery": check_systemd_service("ai-celery"),
-        },
-        "workers": check_celery_workers(),
-        "proxy": check_rss_proxy(),
-        "task_queue": check_task_queue(),
-        "feed_health": check_feed_health(),
+def get_full_health_report():
+    services = {
+        "redis": check_redis(), "neo4j": check_neo4j(),
+        "rsshub": check_docker_container(RSSHUB_CONTAINER),
+        "postgresql": check_postgresql(),
     }
-
+    for k, v in SYSTEMD_SERVICES.items(): services[k] = check_systemd_service(v)
+    return {"timestamp": datetime.now(timezone.utc).isoformat(), "services": services, "workers": check_celery_workers(), "proxy": check_rss_proxy(), "task_queue": check_task_queue(), "feed_health": check_feed_health()}
 
 if __name__ == "__main__":
-    report = get_full_health_report()
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    print(json.dumps(get_full_health_report(), indent=2, ensure_ascii=False))

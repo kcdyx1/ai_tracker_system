@@ -41,7 +41,6 @@ FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 FEEDS_UNIFIED_FILE = CONFIG_DIR / "feeds_unified.json"
 HISTORY_FILE = CONFIG_DIR / "collector_history.json"
 METADATA_FILE = CONFIG_DIR / "collector_metadata.json"
-DB_PATH = Path(__file__).parent / "ai_tracker.db"
 
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
 GITHUB_API_URL = "https://api.github.com"

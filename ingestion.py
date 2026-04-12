@@ -5,16 +5,40 @@ AI Tracker System - 网页抓取清洗模块
 使用 Jina AI 的 r.jina.ai 服务获取纯净的 Markdown 内容
 """
 
+import os
+import random
 import requests
 import cloudscraper
 
 
-# 常见的请求头，防止被拦截
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+# 多个 User-Agent 轮换
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/15.0",
+]
+
+# 代理配置（可选）
+PROXY_URL = os.environ.get("AI_PROXY_URL", "")
+
+
+
+def get_headers():
+    """返回随机 User-Agent 的请求头"""
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+
+def get_proxies():
+    """返回代理配置（如果没有配置代理则返回 None）"""
+    if PROXY_URL:
+        return {"http": PROXY_URL, "https": PROXY_URL}
+    return None
+
 
 
 def fetch_clean_markdown(url: str) -> str:
@@ -37,7 +61,7 @@ def fetch_clean_markdown(url: str) -> str:
         
         response = requests.get(
             jina_url,
-            headers=DEFAULT_HEADERS,
+            headers=get_headers(),
             timeout=(5, 10)
         )
         
@@ -65,8 +89,8 @@ def fetch_direct(url: str) -> str:
     """
     print(f"  🔄 尝试 cloudscraper 直接抓取...")
     try:
-        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-        response = scraper.get(url, timeout=20)
+        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False, 'custom': random.choice(USER_AGENTS)})
+        response = scraper.get(url, timeout=20, proxies=proxies)
         
         if response.status_code == 200:
             # 尝试提取纯文本

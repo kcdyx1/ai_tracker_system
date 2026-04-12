@@ -48,14 +48,14 @@ def task_exists(url: str) -> bool:
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT 1 FROM task_queue WHERE url = ? LIMIT 1", (url,))
+        c.execute("SELECT 1 FROM task_queue WHERE url = %s LIMIT 1", (url,))
         return c.fetchone() is not None
     finally:
         conn.close()
 
 
 def push_task(url: str) -> bool:
-    """Write to SQLite and dispatch to Celery with lowest priority (9)"""  
+    """Write to PostgreSQL and dispatch to Celery with lowest priority (9)"""
     sys.path.insert(0, str(ROOT))
     from database import get_connection
     from worker import process_intel_task
@@ -63,29 +63,29 @@ def push_task(url: str) -> bool:
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT id, status FROM task_queue WHERE url = ?", (url,))
+        c.execute("SELECT id, status FROM task_queue WHERE url = %s", (url,))
         row = c.fetchone()
         if row is None:
             from datetime import datetime as dt
             now = dt.now(timezone.utc).isoformat()
             c.execute(
-                "INSERT INTO task_queue (url, status, created_at) VALUES (?, 'pending', ?)",
+                "INSERT INTO task_queue (url, status, created_at) VALUES (%s, 'pending', %s) RETURNING id",
                 (url, now)
             )
             conn.commit()
-            task_id = c.lastrowid
+            task_id = c.fetchone()["id"]
             # Priority 9 = lowest, does not compete with daily tasks
             process_intel_task.apply_async(args=[task_id, url], priority=9)
             return True
-        elif row[1] in ('failed', 'completed'):
+        elif row["status"] in ('failed', 'completed'):
             from datetime import datetime as dt
             now = dt.now(timezone.utc).isoformat()
             c.execute(
-                "UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = ? WHERE url = ?",
+                "UPDATE task_queue SET status = 'pending', error_message = NULL, created_at = %s WHERE url = %s",
                 (now, url)
             )
             conn.commit()
-            process_intel_task.apply_async(args=[row[0], url], priority=9)
+            process_intel_task.apply_async(args=[row["id"], url], priority=9)
             return True
         else:
             return False

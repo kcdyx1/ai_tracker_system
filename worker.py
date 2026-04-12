@@ -9,7 +9,7 @@ from celery import Celery
 from celery.schedules import crontab
 from markitdown import MarkItDown
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from database import update_task_status, save_extraction_result, get_connection
 from extractor import extract_with_validation
@@ -91,10 +91,47 @@ def process_intel_task(self, task_id: int, url: str):
         print(f"🎉 [V8 引擎] 任务 #{task_id} 完美解析! 共摄入 {total_ent} 实体, {total_evt} 事件")
 
     except Exception as e:
-        print(f"❌ [V8 引擎] 任务 #{task_id} 发生异常: {e}")
-        update_task_status(task_id, "failed", str(e))
-        # 60秒后自动重新投胎
-        raise self.retry(exc=e, countdown=60)
+        error_str = str(e)
+        print("ERROR [V8] Task #" + str(task_id) + " error: " + error_str)
+
+        # 判断是否是永久失败错误（网站封禁、内容为空等）
+        permanent_errors = [
+            "网页抓取为空或遭拦截",
+            "连接超时",
+            "无法访问",
+            "页面加载失败",
+        ]
+        is_permanent = any(err in error_str for err in permanent_errors)
+
+        # 获取当前 fail_count
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT fail_count FROM task_queue WHERE id = %s", (task_id,))
+        row = cur.fetchone()
+        prev_count = row["fail_count"] if row else 0
+        conn.close()
+
+        new_count = prev_count + 1
+
+        if is_permanent and new_count >= 5:
+            # 超过阈值，永久跳过
+            update_task_status(task_id, "failed", error_str, fail_count=new_count)
+            print("WARNING [V8] Task #" + str(task_id) + " failed " + str(new_count) + " times, marking permanent skip")
+            return  # 不重试
+        elif is_permanent:
+            # 指数退避：1h -> 6h -> 24h -> 72h
+            delays = [3600, 21600, 86400, 259200]
+            delay = delays[min(new_count - 1, len(delays) - 1)]
+            next_retry = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            update_task_status(task_id, "failed", error_str, fail_count=new_count,
+                             next_retry_at=next_retry.isoformat())
+            print("WARNING [V8] Task #" + str(task_id) + " failed " + str(new_count) + " times, retry in " + str(delay//3600) + "h")
+            schedule_retry.apply_async(args=[task_id], countdown=delay)
+            return  # 不使用 self.retry
+        else:
+            # 临时错误，保持原有逻辑
+            update_task_status(task_id, "failed", error_str)
+            raise self.retry(exc=e, countdown=60)
 
 
 def _build_in_clause(ids: list) -> tuple[str, list]:
@@ -106,27 +143,55 @@ def _build_in_clause(ids: list) -> tuple[str, list]:
 
 
 @celery_app.task
+def schedule_retry(task_id: int):
+    """延迟重试任务：将 failed 改回 pending 并触发处理"""
+    from database import push_task
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT url FROM task_queue WHERE id = %s", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return
+    url = row["url"]
+    cur.execute(
+        "UPDATE task_queue SET status = 'pending' WHERE id = %s AND status = 'failed'",
+        (task_id,)
+    )
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    if changed:
+        print("[retry] Task #" + str(task_id) + " (" + url + ") requeued")
+        process_intel_task.apply_async(args=[task_id, url])
+
 def reset_stuck_tasks():
-    """每10分钟重置卡住的 processing 任务（超过30分钟未完成视为卡住）"""
-    print(f"\n🔧 [Stuck任务清理] 开始扫描卡住的任务...")
+    """重置卡死的任务：processing 超时 和 到期的指数退避任务"""
+    print("[Stuck-Release] Starting stuck task scan...")
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            UPDATE task_queue
-            SET status = 'pending', error_message = 'auto-reset: stuck in processing > 30min'
-            WHERE status = 'processing'
-            AND created_at < NOW() - INTERVAL '30 minutes'
-        """)
+        # 重置卡死的 processing 任务
+        cursor.execute(
+            "UPDATE task_queue SET status = 'pending', error_message = 'auto-reset: stuck in processing > 30min' WHERE status = 'processing' AND created_at < NOW() - INTERVAL '30 minutes'"
+        )
         conn.commit()
-        count = cursor.rowcount
-        if count > 0:
-            print(f"🔧 [Stuck任务清理] 重置了 {count} 个卡住的任务")
+        count1 = cursor.rowcount
+
+        # 重置到期的指数退避任务
+        cursor.execute(
+            "UPDATE task_queue SET status = 'pending' WHERE status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW() AND fail_count > 0 AND fail_count < 5"
+        )
+        conn.commit()
+        count2 = cursor.rowcount
+
+        total = count1 + count2
+        if total > 0:
+            print("[Stuck-Release] Reset " + str(total) + " tasks (" + str(count1) + " processing, " + str(count2) + " retry)")
         else:
-            print(f"🔧 [Stuck任务清理] 没有发现卡住的任务")
+            print("[Stuck-Release] No stuck tasks found")
     finally:
         conn.close()
-
 
 @celery_app.task
 def deduplicate_entities():

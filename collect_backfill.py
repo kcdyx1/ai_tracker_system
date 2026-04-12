@@ -25,11 +25,29 @@ def save_paper(paper_data: dict) -> bool:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT OR REPLACE INTO papers (
+            INSERT INTO papers (
                 id, title, abstract, authors, published_date, updated_date,
                 arxiv_id, arxiv_url, pdf_url, categories, comment, doi,
                 citation_count, reference_count, source, source_url, raw_metadata, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                title = EXCLUDED.title,
+                abstract = EXCLUDED.abstract,
+                authors = EXCLUDED.authors,
+                published_date = EXCLUDED.published_date,
+                updated_date = EXCLUDED.updated_date,
+                arxiv_id = EXCLUDED.arxiv_id,
+                arxiv_url = EXCLUDED.arxiv_url,
+                pdf_url = EXCLUDED.pdf_url,
+                categories = EXCLUDED.categories,
+                comment = EXCLUDED.comment,
+                doi = EXCLUDED.doi,
+                citation_count = EXCLUDED.citation_count,
+                reference_count = EXCLUDED.reference_count,
+                source = EXCLUDED.source,
+                source_url = EXCLUDED.source_url,
+                raw_metadata = EXCLUDED.raw_metadata,
+                created_at = EXCLUDED.created_at
         """, (
             paper_data.get('id'),
             paper_data.get('title'),
@@ -58,18 +76,44 @@ def save_paper(paper_data: dict) -> bool:
     finally:
         conn.close()
 
+
 def save_repository(repo_data: dict) -> bool:
     """保存 GitHub 仓库到数据库"""
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT OR REPLACE INTO repositories (
+            INSERT INTO repositories (
                 id, name, full_name, description, stars, forks, watchers, open_issues,
                 language, license, topics, owner, owner_url, created_at, updated_at,
                 pushed_at, html_url, github_url, issues_url, primary_language, languages,
                 source, trending_date, raw_metadata, created_at_ts
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                full_name = EXCLUDED.full_name,
+                description = EXCLUDED.description,
+                stars = EXCLUDED.stars,
+                forks = EXCLUDED.forks,
+                watchers = EXCLUDED.watchers,
+                open_issues = EXCLUDED.open_issues,
+                language = EXCLUDED.language,
+                license = EXCLUDED.license,
+                topics = EXCLUDED.topics,
+                owner = EXCLUDED.owner,
+                owner_url = EXCLUDED.owner_url,
+                created_at = EXCLUDED.created_at,
+                updated_at = EXCLUDED.updated_at,
+                pushed_at = EXCLUDED.pushed_at,
+                html_url = EXCLUDED.html_url,
+                github_url = EXCLUDED.github_url,
+                issues_url = EXCLUDED.issues_url,
+                primary_language = EXCLUDED.primary_language,
+                languages = EXCLUDED.languages,
+                source = EXCLUDED.source,
+                trending_date = EXCLUDED.trending_date,
+                raw_metadata = EXCLUDED.raw_metadata,
+                created_at_ts = EXCLUDED.created_at_ts
         """, (
             repo_data.get('id'),
             repo_data.get('name'),
@@ -105,6 +149,7 @@ def save_repository(repo_data: dict) -> bool:
     finally:
         conn.close()
 
+
 def parse_arxiv_date(date_str: str) -> datetime:
     """解析arXiv日期字符串"""
     try:
@@ -115,6 +160,7 @@ def parse_arxiv_date(date_str: str) -> datetime:
             return datetime.strptime(date_str[:10], '%Y-%m-%d')
         except:
             return datetime.now()
+
 
 def backfill_arxiv(days: int = 90):
     """Backfill arXiv papers from the past N days"""
@@ -232,6 +278,7 @@ def backfill_arxiv(days: int = 90):
     print(f"\narXiv backfill complete: {total_count} papers")
     return total_count
 
+
 def backfill_github(days: int = 30):
     """Backfill GitHub Trending from the past N days"""
     from bs4 import BeautifulSoup
@@ -337,6 +384,7 @@ def backfill_github(days: int = 30):
         print(f"GitHub Trending error: {e}")
         return 0
 
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Backfill AI Tracker data")
@@ -358,6 +406,7 @@ def main():
     print(f"  arXiv papers: {total_arxiv}")
     print(f"  GitHub repos: {total_github}")
     print(f"  Total: {total_arxiv + total_github}")
+
 
 if __name__ == "__main__":
     main()

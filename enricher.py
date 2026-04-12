@@ -13,6 +13,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 from database import get_connection, query_entity_by_id
 import urllib3
+from datetime import datetime, timezone
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
@@ -143,8 +144,8 @@ def run_enrichment(entity_id: str) -> dict:
             current_attrs.update(fused_data['attributes'])
         new_desc = fused_data['description'] or entity.get('description', '')
 
-        cursor.execute("UPDATE entities SET description = ?, attributes_json = ? WHERE id = ?",
-                       (new_desc, json.dumps(current_attrs, ensure_ascii=False), entity_id))
+        cursor.execute("UPDATE entities SET description = %s, attributes_json = %s, enriched_at = %s WHERE id = %s",
+                       (new_desc, json.dumps(current_attrs, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), entity_id))
         conn.commit()
         conn.close()
 

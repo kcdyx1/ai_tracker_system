@@ -30,6 +30,7 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 FEEDS_FILE = CONFIG_DIR / "feeds.json"
 FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 HISTORY_FILE = CONFIG_DIR / "feeder_history.json"
+RSS_HEALTH_FILE = CONFIG_DIR / "feed_health.json"
 
 # API URL 可配置，优先使用环境变量
 API_URL = os.environ.get("API_INGEST_URL", "http://127.0.0.1:8000/api/ingest")
@@ -459,9 +460,47 @@ def is_high_value_intel(title, summary, content, url, source_quality=5):
         return total >= 1
 
 
+
+def _load_rss_health() -> dict:
+    """加载 RSS 健康状态（失败追踪）"""
+    if not RSS_HEALTH_FILE.exists():
+        return {"consecutive_failures": {}}
+    with open(RSS_HEALTH_FILE, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except:
+            return {"consecutive_failures": {}}
+
+def _save_rss_health(health: dict):
+    """保存 RSS 健康状态"""
+    with open(RSS_HEALTH_FILE, "w", encoding="utf-8") as f:
+        json.dump(health, f, ensure_ascii=False, indent=2)
+
+def record_rss_failure(feed_url: str, error: str):
+    """记录 RSS 抓取失败"""
+    health = _load_rss_health()
+    failures = health.get("consecutive_failures", {})
+    failures[feed_url] = {"count": failures.get(feed_url, {}).get("count", 0) + 1, "last_error": error}
+    health["consecutive_failures"] = failures
+    _save_rss_health(health)
+
+def clear_rss_failures(feed_url: str):
+    """清除 RSS 失败记录（成功时调用）"""
+    health = _load_rss_health()
+    failures = health.get("consecutive_failures", {})
+    if feed_url in failures:
+        del failures[feed_url]
+        health["consecutive_failures"] = failures
+        _save_rss_health(health)
+
 def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -> list:
     try:
-        feed = feedparser.parse(feed_url)
+        try:
+            feed = feedparser.parse(feed_url)
+        except Exception as e:
+            record_rss_failure(feed_url, str(e))
+            return []
+            clear_rss_failures(feed_url)  # 成功解析但无条目也算成功
         if not feed.entries:
             return []
 

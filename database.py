@@ -125,7 +125,9 @@ def init_db() -> None:
                 url TEXT UNIQUE NOT NULL,
                 status TEXT DEFAULT 'pending',
                 error_message TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                fail_count INTEGER DEFAULT 0,
+                next_retry_at TIMESTAMP WITH TIME ZONE
             )
         """)
 
@@ -135,6 +137,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)",
             "CREATE INDEX IF NOT EXISTS idx_task_status ON task_queue(status)",
             "CREATE INDEX IF NOT EXISTS idx_events_published ON events(published_date)",
+                "CREATE INDEX IF NOT EXISTS idx_task_retry ON task_queue(next_retry_at) WHERE status = 'failed' AND fail_count > 0",
         ]
         for idx_sql in indexes:
             cursor.execute(idx_sql)
@@ -396,14 +399,20 @@ def get_pending_task() -> dict | None:
         conn.close()
 
 
-def update_task_status(task_id: int, status: str, error_msg: str = None) -> None:
+def update_task_status(task_id: int, status: str, error_msg: str = None, fail_count: int = None, next_retry_at: str = None) -> None:
     conn = _get_pg_conn()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE task_queue SET status = %s, error_message = %s WHERE id = %s",
-            (status, error_msg, task_id)
-        )
+        if fail_count is not None:
+            cursor.execute(
+                "UPDATE task_queue SET status = %s, error_message = %s, fail_count = %s, next_retry_at = %s WHERE id = %s",
+                (status, error_msg, fail_count, next_retry_at, task_id)
+            )
+        else:
+            cursor.execute(
+                "UPDATE task_queue SET status = %s, error_message = %s WHERE id = %s",
+                (status, error_msg, task_id)
+            )
         conn.commit()
     finally:
         conn.close()
@@ -465,11 +474,12 @@ def get_smart_rag_context(query: str) -> str:
 
         # 关联事件
         if matched_ids:
-            placeholders = ",".join(["%s"] * len(matched_ids))
+            # Use a simpler approach: ILIKE with escaped % for each entity
+            conditions = " OR ".join(["involved_entities_json::text ILIKE '%%' || %s || '%%'" for _ in matched_ids])
             cursor.execute(f"""
                 SELECT e.id, e.title, e.date, e.summary, e.risk_level, e.sentiment
                 FROM events e
-                WHERE e.involved_entities_json::text SIMILAR TO '%({placeholders})%'
+                WHERE {conditions}
                 ORDER BY e.date DESC
                 LIMIT 30
             """, matched_ids)
@@ -479,7 +489,7 @@ def get_smart_rag_context(query: str) -> str:
                 for r in event_rows:
                     risk_tag = f" [{r.get('risk_level') or '?'}] " if r.get('risk_level') else "  "
                     context_parts.append(
-                        f"  {r['date'][:10]}{risk_tag}{r['title']}: {r['summary'] or ''}"
+                        f"  {str(r['date'])[:10]}{risk_tag}{r['title']}: {r['summary'] or ''}"
                     )
 
         # 兜底：FTS 事件检索
@@ -493,14 +503,14 @@ def get_smart_rag_context(query: str) -> str:
         if fts_rows:
             context_parts.append("\n【语义相关】最新动态：\n")
             for r in fts_rows:
-                context_parts.append(f"  {r['date'][:10]} {r['title']}: {r['summary'] or ''}")
+                context_parts.append(f"  {str(r['date'])[:10]} {r['title']}: {r['summary'] or ''}")
 
         if not context_parts:
             cursor.execute("SELECT title, date, summary FROM events ORDER BY date DESC LIMIT 20")
             fallback = cursor.fetchall()
             context_parts = ["【全局动态】\n"]
             for r in fallback:
-                context_parts.append(f"  {r['date'][:10]} {r['title']}: {r['summary'] or ''}")
+                context_parts.append(f"  {str(r['date'])[:10]} {r['title']}: {r['summary'] or ''}")
 
         return "\n".join(context_parts)
     finally:

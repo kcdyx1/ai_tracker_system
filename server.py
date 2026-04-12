@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -197,52 +197,74 @@ async def get_task_stats():
         conn.close()
 
 @app.get("/api/graph")
-async def get_graph_data(entity_id: str = None):
+async def get_graph_data(
+    entity_id: str = None,
+    depth: int = Query(1, ge=1, le=2),
+    rel_type: str = Query(None)
+):
+    """Graph API: entity_id=root, depth=1=direct/2=2nd-degree, rel_type=filter"""
+    from database import get_connection
+
+    def get_pg_weight(source_id, target_id, rel):
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT weight FROM relationships WHERE source_id=%s AND target_id=%s AND relation_type=%s LIMIT 1", (source_id, target_id, rel))
+            row = cur.fetchone()
+            conn.close()
+            return row["weight"] if row else 1.0
+        except Exception:
+            return 1.0
+
     try:
+        params = {}
         if entity_id:
-            query = """
-            MATCH (s:Entity)-[r]->(t:Entity)
-            WHERE s.id = $entity_id OR t.id = $entity_id
-            RETURN s.id AS source_id, s.name AS source_name, s.type AS source_type,
-                   type(r) AS rel_type,
-                   t.id AS target_id, t.name AS target_name, t.type AS target_type
-            LIMIT 500
-            """
-            params = {"entity_id": entity_id}
+            if depth >= 2:
+                if rel_type:
+                    query = "MATCH (s:Entity)-[r1]->(m:Entity)-[r2]->(t:Entity) WHERE s.id=$entity_id AND type(r1)=$rel_type AND type(r2)=$rel_type RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(r1) AS rel, m.id AS tid, m.name AS tname, m.type AS ttype, t.id AS t2id, t.name AS t2name, t.type AS t2type LIMIT 800"
+                    params = {"entity_id": entity_id, "rel_type": rel_type}
+                else:
+                    query = "MATCH (s:Entity)-[r1]->(m:Entity)-[r2]->(t:Entity) WHERE s.id=$entity_id RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(r1) AS rel, m.id AS tid, m.name AS tname, m.type AS ttype, t.id AS t2id, t.name AS t2name, t.type AS t2type LIMIT 800"
+                    params = {"entity_id": entity_id}
+            else:
+                if rel_type:
+                    query = "MATCH (s:Entity)-[r]->(t:Entity) WHERE (s.id=$entity_id OR t.id=$entity_id) AND type(r)=$rel_type RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(r) AS rel, t.id AS tid, t.name AS tname, t.type AS ttype LIMIT 500"
+                    params = {"entity_id": entity_id, "rel_type": rel_type}
+                else:
+                    query = "MATCH (s:Entity)-[r]->(t:Entity) WHERE s.id=$entity_id OR t.id=$entity_id RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(r) AS rel, t.id AS tid, t.name AS tname, t.type AS ttype LIMIT 500"
+                    params = {"entity_id": entity_id}
         else:
-            # 💡 V3: 生态平衡网 (Balanced Ecosystem)
-            query = """
-            MATCH (s:Entity)-[r]->()
-            WITH s, count(r) AS degree
-            ORDER BY degree DESC LIMIT 40
-            
-            MATCH (s)-[r]->(t:Entity)
-            WITH s, collect({r: r, t: t})[0..8] AS rels
-            
-            UNWIND rels AS rel
-            RETURN s.id AS source_id, s.name AS source_name, s.type AS source_type,
-                   type(rel.r) AS rel_type,
-                   rel.t.id AS target_id, rel.t.name AS target_name, rel.t.type AS target_type
-            """
-            params = {}
+            if rel_type:
+                query = "MATCH (s:Entity)-[r]->() WHERE type(r)=$rel_type WITH s,count(r) AS degree ORDER BY degree DESC LIMIT 30 MATCH (s)-[r]->(t:Entity) RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(r) AS rel, t.id AS tid, t.name AS tname, t.type AS ttype LIMIT 400"
+                params = {"rel_type": rel_type}
+            else:
+                query = "MATCH (s:Entity)-[r]->() WITH s,count(r) AS degree ORDER BY degree DESC LIMIT 40 MATCH (s)-[r]->(t:Entity) WITH s,collect({r:r,t:t})[0..8] AS rels UNWIND rels AS rel RETURN s.id AS sid, s.name AS sname, s.type AS stype, type(rel.r) AS rel, rel.t.id AS tid, rel.t.name AS tname, rel.t.type AS ttype"
+                params = {}
 
         records = neo_db.execute_query(query, params)
-        nodes_dict = {}
-        links = []
+        nodes, links = {}, []
 
         for row in records:
-            s_id, t_id = row['source_id'], row['target_id']
-            if s_id not in nodes_dict:
-                nodes_dict[s_id] = {"id": s_id, "name": row['source_name'], "type": row['source_type']}
-            if t_id not in nodes_dict:
-                nodes_dict[t_id] = {"id": t_id, "name": row['target_name'], "type": row['target_type']}
-                
-            links.append({"source": s_id, "target": t_id, "label": row['rel_type']})
+            sid, tid = row["sid"], row["tid"]
+            if sid not in nodes:
+                nodes[sid] = {"id": sid, "name": row["sname"], "type": row["stype"]}
+            if tid not in nodes:
+                nodes[tid] = {"id": tid, "name": row["tname"], "type": row["ttype"]}
+            rel = row["rel"]
+            w = get_pg_weight(sid, tid, rel)
+            links.append({"source": sid, "target": tid, "label": rel, "weight": w})
+            if depth >= 2 and "t2id" in row and row["t2id"]:
+                t2id = row["t2id"]
+                if t2id not in nodes:
+                    nodes[t2id] = {"id": t2id, "name": row["t2name"], "type": row["t2type"]}
+                w2 = get_pg_weight(tid, t2id, rel)
+                links.append({"source": tid, "target": t2id, "label": rel, "weight": w2})
 
-        return {"nodes": list(nodes_dict.values()), "links": links}
+        return {"nodes": list(nodes.values()), "links": links}
     except Exception as e:
-        logger.error(f"Neo4j 图谱 API 崩溃: {e}")
+        logger.error("Neo4j graph API error: " + str(e))
         return {"nodes": [], "links": []}
+
 
 @app.get("/api/events")
 async def get_events(limit: int = 30):
@@ -274,15 +296,61 @@ async def get_entity_details(entity_id: str):
                 )
                 if rows and rows[0]:
                     r = rows[0]
-                    entity = {"id": r["id"], "name": r["name"], "type": r.get("type", "unknown"), "description": r.get("description") or "", "aliases_json": "[]", "created_at": "", "attributes_json": None}
+                    entity = {"id": r["id"], "name": r["name"], "type": r.get("type", "unknown"), "description": r.get("description") or "", "aliases_json": "[]", "created_at": "", "attributes_json": None, "enriched_at": None}
             except Exception as neo_err:
                 logger.warning(f"Neo4j 兜底查询失败: {neo_err}")
 
         if not entity:
             raise HTTPException(status_code=404, detail="实体档案不存在")
 
+        from datetime import datetime, timezone, timedelta
+        needs_enrich = False
+        enriched_at = entity.get("enriched_at")
+        if not enriched_at or enriched_at == "null" or enriched_at is None:
+            asyncio.create_task(asyncio.to_thread(run_enrichment, entity_id))
+            needs_enrich = True
+        else:
+            try:
+                last_enrich = datetime.fromisoformat(enriched_at.replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - last_enrich) > timedelta(days=7):
+                    asyncio.create_task(asyncio.to_thread(run_enrichment, entity_id))
+                    needs_enrich = True
+            except (ValueError, TypeError):
+                asyncio.create_task(asyncio.to_thread(run_enrichment, entity_id))
+                needs_enrich = True
+
+        # Related papers: search by entity name in papers table
+        related_papers = []
+        try:
+            entity_name = entity.get("name", "")
+            if entity_name:
+                conn = get_connection()
+                cur = conn.cursor()
+                # Simple full-text search using ILIKE on title/abstract
+                pattern = r"%{}%".format(entity_name.replace("%", "%%"))
+                cur.execute("""
+                    SELECT id, title, abstract, authors, published_date, citation_count, source_url
+                    FROM papers
+                    WHERE title ILIKE %s OR abstract ILIKE %s
+                    ORDER BY published_date DESC
+                    LIMIT 5
+                """, (pattern, pattern))
+                for row in cur.fetchall():
+                    related_papers.append({
+                        "id": row["id"],
+                        "title": row["title"],
+                        "abstract": (row["abstract"] or "")[:200],
+                        "authors": row["authors"],
+                        "published_date": str(row["published_date"]) if row["published_date"] else None,
+                        "citation_count": row["citation_count"],
+                        "source_url": row["source_url"],
+                    })
+                conn.close()
+        except Exception as e:
+            logger.warning("Failed to fetch related papers: " + str(e))
+
         events = get_events_for_entity(entity_id)
-        return {"entity": entity, "events": events[:10]}
+        return {"entity": entity, "events": events[:10], "needs_enrich": needs_enrich, "related_papers": related_papers}
     except HTTPException:
         raise
     except Exception as e:
