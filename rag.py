@@ -5,6 +5,7 @@ AI Tracker System - L3 战略推演引擎 (Graph-RAG)
 
 import os
 import anthropic
+from datetime import datetime, timezone
 from database import get_smart_rag_context
 
 # ── 统一的 API 配置获取 ──────────────────────────────────────────────────────
@@ -26,9 +27,15 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
     # 1. 核心：从数据库抽取增强版 L2 级图谱上下文 (自带风险、情感与原文证据)
     context = get_smart_rag_context(user_query)
 
-    # 2. 灵魂：构建 L3 级战略推演 System Prompt
+    # 2. 注入当前日期
+    now = datetime.now(timezone.utc)
+    current_date_str = now.strftime("%Y年%m月%d日 %A %H:%M:%S UTC")
+
+    # 3. 灵魂：构建 L3 级战略推演 System Prompt
     system_prompt = f"""你现在是本情报系统的「首席战略官 (Chief Intelligence Officer)」。
 你的任务是基于底层数据库检索出的【客观事实 (L2 级情报)】，为用户提供【战略推演 (L3 级研判)】。
+
+[[SYSTEM_TIME]]
 
 【情报雷达检索到的底层事实 (包含红绿灯标签与证据)】：
 {context}
@@ -39,6 +46,7 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
 3. 证据链闭环：当你提出一个战略观点时，必须引用检索内容里的证据。
 4. 降维打击：用冷酷、极客、一针见血的军事情报风格回答。
 5. 无中生有是死罪：如果情报不足，直接回答"情报雷达暂未捕获相关信号"。
+6. 日期判断：如果用户问"今天是几号"或类似问题，必须使用【系统时间】中的日期回答，不得臆测。
 
 【⚠️ 排版与视觉铁律（极其重要）】：
 1. 绝对不允许使用 Markdown 表格 (Table)！前端无法渲染表格。
@@ -54,7 +62,7 @@ def chat_with_graph(user_query: str, chat_history: list = None) -> str:
             role = "assistant" if msg.get("role") == "assistant" else "user"
             messages.append({"role": role, "content": msg.get("content", "")})
 
-    messages.append({"role": "user", "content": user_query})
+    messages.append({"role": "user", "content": "[系统时间: " + current_date_str + "] " + user_query})
 
     # 4. 调用大模型进行终极推演
     try:
