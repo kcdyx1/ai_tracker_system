@@ -36,6 +36,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── HTTP Proxy (Clash Verge) ────────────────────────────────────────────────
+_proxy = os.environ.get("HTTP_PROXY", "") or os.environ.get("http_proxy", "") or "http://127.0.0.1:7897"
+os.environ["HTTP_PROXY"] = _proxy
+os.environ["http_proxy"] = _proxy
+os.environ["HTTPS_PROXY"] = _proxy
+os.environ["https_proxy"] = _proxy
+logger.info(f"代理已启用: {_proxy}")
+
+
 CONFIG_DIR = Path(__file__).parent / "config"
 FEEDS_V2_FILE = CONFIG_DIR / "feeds_v2.json"
 FEEDS_UNIFIED_FILE = CONFIG_DIR / "feeds_unified.json"
@@ -558,17 +567,56 @@ class RSSCollector(BaseCollector):
         if not url:
             return []
         logger.info(f"  📡 抓取 RSS: {self.name}")
-        DEFAULT_TIMEOUT = (5, 15)
-        try:
-            response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
-            })
-            response.raise_for_status()
-        except requests.exceptions.SSLError:
-            logger.warning(f"SSL error for {url}, retrying with verify=False")
-            response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
-            }, verify=False)
+        DEFAULT_TIMEOUT = (5, 30)
+        MAX_RETRIES = 2
+        response = None
+        last_error = None
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
+                })
+                if response.status_code in (200, 301, 302, 307):
+                    break
+                last_error = f"HTTP {response.status_code}"
+            except requests.exceptions.SSLError as e:
+                if attempt == MAX_RETRIES:
+                    logger.warning(f"SSL error for {url}, trying without verify")
+                    response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; AI-Tracker/1.0; +http://example.com/bot)"
+                    }, verify=False)
+                    if response.status_code in (200, 301, 302, 307):
+                        break
+                last_error = str(e)
+            except Exception as e:
+                last_error = str(e)
+
+            if attempt < MAX_RETRIES:
+                import time
+                time.sleep(1)
+
+        if response is None or response.status_code not in (200, 301, 302, 307):
+            # Fallback: use curl subprocess (handles proxy better)
+            import subprocess
+            try:
+                curl_cmd = [
+                    "curl", "-sL", "--max-time", "30",
+                    "-x", os.environ.get("HTTP_PROXY", "http://127.0.0.1:7897"),
+                    "-A", "Mozilla/5.0 (compatible; AI-Tracker/1.0)",
+                    url
+                ]
+                content_bytes = subprocess.check_output(curl_cmd, stderr=subprocess.DEVNULL)
+                from io import BytesIO
+                response = type('Response', (), {
+                    'status_code': 200,
+                    'content': content_bytes,
+                    'text': content_bytes.decode('utf-8', errors='replace')
+                })()
+                logger.info(f"    curl fallback successful for {url}")
+            except Exception as curl_err:
+                logger.error(f"    FAIL RSS fetch (curl fallback error): {curl_err}")
+                return []
 
         try:
             feed = feedparser.parse(response.content)
