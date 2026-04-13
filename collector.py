@@ -602,7 +602,7 @@ class RSSCollector(BaseCollector):
             try:
                 curl_cmd = [
                     "curl", "-sL", "--max-time", "30",
-                    "-x", os.environ.get("HTTP_PROXY", "http://127.0.0.1:7897"),
+                    "-x", os.environ.get("HTTP_PROXY", "http://127.0.0.1:7897") if not url.startswith("http://127.0.0.1") and not url.startswith("http://localhost") else "",
                     "-A", "Mozilla/5.0 (compatible; AI-Tracker/1.0)",
                     url
                 ]
