@@ -367,7 +367,8 @@ async def ingest_url(request: Request):
     if not is_new:
         return {"status": "skipped", "message": "任务已在队列中，跳过重复提交"}
 
-    process_intel_task.delay(task_id, url)
+    rss_summary = data.get("rss_summary", "")
+    process_intel_task.delay(task_id, url, rss_summary=rss_summary)
     return {"status": "success", "message": "目标已成功发射至 Redis 高并发队列"}
 
 UPLOAD_DIR = Path(__file__).parent / "data" / "uploads"

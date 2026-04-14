@@ -42,7 +42,7 @@ celery_app.conf.update(
 )
 
 @celery_app.task(bind=True, max_retries=3)
-def process_intel_task(self, task_id: int, url: str):
+def process_intel_task(self, task_id: int, url: str, rss_summary: str = ""):
     """真正的异步解析大拿"""
     print(f"\n🚀 [V8 引擎] 开始处理高价值目标 #{task_id}: {url}")
     # guard: skip if already processing/completed
@@ -113,11 +113,22 @@ def process_intel_task(self, task_id: int, url: str):
 
         new_count = prev_count + 1
 
-        if is_permanent and new_count >= 5:
-            # 超过阈值，永久跳过
-            update_task_status(task_id, "failed", error_str, fail_count=new_count)
-            print("WARNING [V8] Task #" + str(task_id) + " failed " + str(new_count) + " times, marking permanent skip")
-            return  # 不重试
+        # 超过阈值，检查是否有 RSS summary 作为降级 fallback
+        if rss_summary:
+            print("WARNING [V8] Task #" + str(task_id) + " failed " + str(new_count) + " times, using RSS summary fallback")
+            content = "# " + url + "\n\n" + rss_summary
+            chunk_size, overlap = 8000, 400
+            chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size - overlap)]
+            total_ent, total_evt = 0, 0
+            for i, chunk in enumerate(chunks):
+                result = extract_with_validation(chunk)
+                if result.entities or result.events:
+                    save_extraction_result(result)
+                    total_ent += len(result.entities)
+                    total_evt += len(result.events)
+            update_task_status(task_id, "completed")
+            print("🎉 [V8] 任务 #" + str(task_id) + " RSS降级解析完成! 共摄入 " + str(total_ent) + " 实体, " + str(total_evt) + " 事件")
+            return
         elif is_permanent:
             # 指数退避：1h -> 6h -> 24h -> 72h
             delays = [3600, 21600, 86400, 259200]

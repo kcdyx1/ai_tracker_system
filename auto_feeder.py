@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from collections import deque
 import feedparser
 import requests
+import re
 import builtins
 
 # 配置日志输出带时间戳
@@ -493,6 +494,16 @@ def clear_rss_failures(feed_url: str):
         health["consecutive_failures"] = failures
         _save_rss_health(health)
 
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from text for use as RSS fallback content"""
+    if not text:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
 def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -> list:
     try:
         try:
@@ -528,7 +539,8 @@ def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -
 
             # 严格执行 2023 年时间线底线，并过滤硬核内容
             if is_after_2023(entry) and is_high_value_intel(title, summary, content, url):
-                valid_articles.append(url)
+                rss_text = content if content else summary
+                valid_articles.append({"url": url, "title": title, "rss_summary": _strip_html(rss_text)})
 
         log(f"  ✅ 发现 {len(feed.entries)} 篇，提纯出 {len(valid_articles)} 篇极密情报")
         return valid_articles
@@ -537,9 +549,12 @@ def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -
         return []
 
 
-def send_to_api(url: str) -> bool:
+def send_to_api(url: str, rss_summary: str = "") -> bool:
     try:
-        resp = requests.post(API_URL, json={"url": url}, timeout=10)
+        payload = {"url": url}
+        if rss_summary:
+            payload["rss_summary"] = rss_summary
+        resp = requests.post(API_URL, json=payload, timeout=10)
         if resp.status_code == 200:
             log(f"    🎯 成功发射至后端缓冲队列!")
             return True
@@ -583,9 +598,11 @@ def run_auto_feeder():
 
         target_urls = parse_feed(feed_url, history, feed_metadata.get(feed_url))
 
-        for url in target_urls:
+        for item in target_urls:
+            url = item["url"]
+            rss_summary = item.get("rss_summary", "")
             log(f"    -> 锁定目标: {url}")
-            if send_to_api(url):
+            if send_to_api(url, rss_summary):
                 history.add(url)
                 total_pushed += 1
             time.sleep(0.5)  # 控制并发避免打挂后端
