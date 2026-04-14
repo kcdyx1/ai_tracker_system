@@ -332,7 +332,7 @@ def load_feeds():
                 feeds = []
                 tiers = v2_data.get("tiers", {})
                 # 按优先级收集所有feed：core > standard > extended > local
-                tier_order = ["core", "standard", "extended", "wechat", "local"]
+                tier_order = ["core", "standard", "extended", "aggregated", "local"]
                 for tier_name in tier_order:
                     tier = tiers.get(tier_name, {})
                     tier_feeds = tier.get("feeds", [])
