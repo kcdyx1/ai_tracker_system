@@ -1,0 +1,638 @@
+{
+  "tiers": {
+    "core": {
+      "description": "核心AI知识源 - 高质量、低噪音、必抓",
+      "feeds": [
+        {
+          "url": "https://arxiv.org/rss/cs.CL",
+          "name": "arXiv CS.CL",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "论文",
+            "NLP"
+          ]
+        },
+        {
+          "url": "https://arxiv.org/rss/cs.AI",
+          "name": "arXiv CS.AI",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "论文",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://arxiv.org/rss/cs.LG",
+          "name": "arXiv CS.LG",
+          "priority": 9,
+          "quality": 9,
+          "tags": [
+            "research",
+            "paper",
+            "ml"
+          ]
+        },
+        {
+          "url": "https://openai.com/blog/rss.xml",
+          "name": "OpenAI Blog",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "大模型",
+            "官方"
+          ]
+        },
+        {
+          "url": "https://huggingface.co/blog/feed.xml",
+          "name": "Hugging Face Blog",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "开源",
+            "模型"
+          ]
+        },
+        {
+          "url": "https://blogs.nvidia.com/feed/",
+          "name": "NVIDIA Blog",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "GPU",
+            "官方"
+          ]
+        },
+        {
+          "url": "https://blog.google/technology/ai/rss/",
+          "name": "Google AI Blog",
+          "priority": 9,
+          "quality": 10,
+          "tags": [
+            "company",
+            "ai",
+            "research"
+          ]
+        },
+        {
+          "url": "https://research.google.com/feed/",
+          "name": "Google Research",
+          "priority": 9,
+          "quality": 5,
+          "tags": [
+            "研究",
+            "官方"
+          ]
+        },
+        {
+          "url": "https://bair.berkeley.edu/blog/feed.xml",
+          "name": "Berkeley BAIR",
+          "priority": 9,
+          "quality": 5,
+          "tags": [
+            "研究",
+            "学术"
+          ]
+        },
+        {
+          "url": "https://www.microsoft.com/en-us/research/blog/feed/",
+          "name": "Microsoft Research",
+          "priority": 9,
+          "quality": 5,
+          "tags": [
+            "研究",
+            "官方"
+          ]
+        },
+        {
+          "url": "https://ai.meta.com/blog/",
+          "name": "Meta AI Blog",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "company",
+            "ai",
+            "research"
+          ]
+        },
+        {
+          "url": "https://hai.stanford.edu/news/feed",
+          "name": "Stanford HAI",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "research",
+            "ai",
+            "academic"
+          ]
+        },
+        {
+          "url": "https://www.deeplearning.ai/blog/feed/",
+          "name": "DeepLearning AI Blog",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "company",
+            "ai",
+            "education"
+          ]
+        },
+        {
+          "url": "https://pytorch.org/blog/rss.xml",
+          "name": "PyTorch Blog",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "framework",
+            "ai",
+            "research"
+          ]
+        },
+        {
+          "url": "https://vllm.ai/blog/rss.xml",
+          "name": "vLLM Blog",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "framework",
+            "ai",
+            "inference"
+          ]
+        },
+        {
+          "url": "https://drfeeds.com/thebatch",
+          "name": "The Batch",
+          "priority": 9,
+          "quality": 10,
+          "tags": [
+            "newsletter",
+            "ai",
+            "weekly",
+            "curated"
+          ]
+        }
+      ]
+    },
+    "standard": {
+      "description": "标准AI媒体源 - 西文科技媒体",
+      "feeds": [
+        {
+          "url": "https://venturebeat.com/category/ai/feed",
+          "name": "VentureBeat AI",
+          "priority": 7,
+          "quality": 4,
+          "tags": [
+            "媒体",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://www.technologyreview.com/feed/",
+          "name": "MIT Tech Review",
+          "priority": 8,
+          "quality": 5,
+          "tags": [
+            "媒体",
+            "科技"
+          ]
+        },
+        {
+          "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+          "name": "The Verge AI",
+          "priority": 6,
+          "quality": 4,
+          "tags": [
+            "媒体",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+          "name": "TechCrunch AI",
+          "priority": 7,
+          "quality": 4,
+          "tags": [
+            "媒体",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+          "name": "Ars Technica",
+          "priority": 7,
+          "quality": 5,
+          "tags": [
+            "媒体",
+            "科技"
+          ]
+        },
+        {
+          "url": "https://www.marktechpost.com/category/artificial-intelligence/feed/",
+          "name": "MarkTechPost",
+          "priority": 7,
+          "quality": 4,
+          "tags": [
+            "媒体",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://blog.langchain.dev/rss/",
+          "name": "LangChain Blog",
+          "priority": 8,
+          "quality": 4,
+          "tags": [
+            "框架",
+            "Agent"
+          ]
+        },
+        {
+          "url": "https://www.llamaindex.ai/blog/rss.xml",
+          "name": "LlamaIndex Blog",
+          "priority": 8,
+          "quality": 4,
+          "tags": [
+            "框架",
+            "RAG"
+          ]
+        },
+        {
+          "url": "https://blogs.nvidia.com/blog/category/deep-learning/feed/",
+          "name": "NVIDIA Deep Learning Blog",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "company",
+            "gpu",
+            "ai"
+          ]
+        },
+        {
+          "url": "https://blogs.microsoft.com/ai/feed/",
+          "name": "Microsoft AI Blog",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "company",
+            "ai",
+            "cloud"
+          ]
+        },
+        {
+          "url": "https://cohere.com/blog/rss.xml",
+          "name": "Cohere Blog",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "company",
+            "ai",
+            "nlp"
+          ]
+        },
+        {
+          "url": "https://stability.ai/news/rss.xml",
+          "name": "Stability AI News",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "company",
+            "ai",
+            "generative"
+          ]
+        },
+        {
+          "url": "https://hnrss.org/newest?q=AI%20OR%20machine%20learning%20OR%20LLM%20OR%20GPT",
+          "name": "Hacker News AI",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "community",
+            "ai",
+            "discussion"
+          ]
+        },
+        {
+          "url": "https://www.reddit.com/r/MachineLearning.rss",
+          "name": "Reddit ML",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "community",
+            "ai",
+            "discussion"
+          ]
+        },
+        {
+          "url": "https://lobste.rs/r/ai.rss",
+          "name": "Lobsters AI",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "community",
+            "ai",
+            "programming"
+          ]
+        },
+        {
+          "url": "https://blog.langchain.dev/feed/",
+          "name": "LangChain Blog Feed",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "framework",
+            "ai",
+            "agent"
+          ]
+        },
+        {
+          "url": "https://modal.com/blog/rss.xml",
+          "name": "Modal Blog",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "infra",
+            "ai",
+            "cloud"
+          ]
+        },
+        {
+          "url": "https://wandb.ai/blog/rss.xml",
+          "name": "Weights & Biases Blog",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "mlops",
+            "ai",
+            "experiment-tracking"
+          ]
+        },
+        {
+          "url": "https://www.databricks.com/blog/rss.xml",
+          "name": "Databricks Blog",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "data",
+            "ai",
+            "lakehouse"
+          ]
+        },
+        {
+          "url": "https://clickhouse.com/blog/rss.xml",
+          "name": "ClickHouse Blog",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "data",
+            "olap",
+            "database"
+          ]
+        },
+        {
+          "url": "https://lancedb.github.io/blog/rss.xml",
+          "name": "LanceDB Blog",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "vector",
+            "ai",
+            "database"
+          ]
+        },
+        {
+          "url": "https://unsloth.ai/blog/rss.xml",
+          "name": "Unsloth Blog",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "fine-tuning",
+            "ai",
+            "optimization"
+          ]
+        },
+        {
+          "url": "https://www.latent.space/feed",
+          "name": "Latent.Space",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "AI",
+            "newsletter",
+            "podcast",
+            "AI工程师"
+          ]
+        }
+      ]
+    },
+    "extended": {
+      "description": "中文科技媒体",
+      "feeds": [
+        {
+          "url": "https://www.ithome.com/rss/",
+          "name": "IT之家",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        },
+        {
+          "url": "https://www.tmtpost.com/rss",
+          "name": "钛媒体",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        },
+        {
+          "url": "http://www.woshipm.com/feed",
+          "name": "人人都是产品经理",
+          "priority": 6,
+          "quality": 6,
+          "tags": [
+            "tech",
+            "zh",
+            "product"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/36kr/newsflashes",
+          "name": "36kr 快讯",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "ai",
+            "zh",
+            "fast"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/aibase/news",
+          "name": "AIbase 新闻",
+          "priority": 8,
+          "quality": 7,
+          "tags": [
+            "ai",
+            "zh"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/zhihu/daily",
+          "name": "知乎日报",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        },
+        {
+          "url": "https://garymarcus.substack.com/feed",
+          "name": "Gary Marcus",
+          "priority": 6,
+          "quality": 4,
+          "tags": [
+            "专家",
+            "AI评论"
+          ]
+        },
+        {
+          "url": "https://importai.substack.com/feed",
+          "name": "Import AI",
+          "priority": 7,
+          "quality": 4,
+          "tags": [
+            "Newsletter",
+            "AI"
+          ]
+        },
+        {
+          "url": "https://buttondown.email/ainews/rss",
+          "name": "AI News",
+          "priority": 6,
+          "quality": 4,
+          "tags": [
+            "Newsletter",
+            "AI"
+          ]
+        }
+      ]
+    },
+    "aggregated": {
+      "description": "本地 RSSHub 聚合源",
+      "feeds": [
+        {
+          "url": "http://127.0.0.1:1200/36kr/newsflashes",
+          "name": "36kr 快讯",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "ai",
+            "zh",
+            "fast"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/aibase/news",
+          "name": "AIbase 新闻",
+          "priority": 8,
+          "quality": 7,
+          "tags": [
+            "ai",
+            "zh"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/zhihu/daily",
+          "name": "知乎日报",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/zhihu/topics/ai",
+          "name": "知乎 AI 话题",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "ai",
+            "zh"
+          ]
+        },
+        {
+          "url": "https://www.ithome.com/rss/",
+          "name": "IT之家",
+          "priority": 7,
+          "quality": 8,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        },
+        {
+          "name": "HuggingFace Daily Papers",
+          "url": "http://127.0.0.1:1200/huggingface/daily-papers",
+          "type": "rss",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "ai",
+            "paper"
+          ]
+        },
+        {
+          "name": "少数派",
+          "url": "http://127.0.0.1:1200/sspai/index",
+          "type": "rss",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "tech",
+            "zh"
+          ]
+        }
+      ]
+    },
+    "local": {
+      "description": "本地 RSSHub 源",
+      "feeds": [
+        {
+          "url": "http://127.0.0.1:1200/aibase/daily",
+          "name": "AIbase 日报",
+          "priority": 6,
+          "quality": 4,
+          "tags": [
+            "中文",
+            "AI"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/leiphone/category/ai",
+          "name": "雷峰网 AI",
+          "priority": 6,
+          "quality": 4,
+          "tags": [
+            "中文",
+            "AI"
+          ]
+        }
+      ]
+    }
+  },
+  "settings": {
+    "core_crawl_interval_hours": 6,
+    "standard_crawl_interval_hours": 12,
+    "extended_crawl_interval_hours": 24,
+    "aggregated_crawl_interval_hours": 12,
+    "auto_degrade_on_failure": true,
+    "max_failures_before_degrade": 5,
+    "min_quality_threshold": 3
+  }
+}
