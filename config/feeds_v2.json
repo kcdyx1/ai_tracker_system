@@ -459,6 +459,41 @@
             "产品",
             "创业"
           ]
+        },
+        {
+          "url": "https://stratechery.com/feed/",
+          "name": "Stratechery",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "tech",
+            "strategy",
+            "analysis",
+            "Ben Thompson"
+          ]
+        },
+        {
+          "url": "https://hnrss.org/frontpage?points=100",
+          "name": "Hacker News 100+",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "community",
+            "AI",
+            "discussion"
+          ]
+        },
+        {
+          "url": "https://newsletter.pragmaticengineer.com/feed",
+          "name": "Pragmatic Engineer",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "engineering",
+            "career",
+            "culture",
+            "AI"
+          ]
         }
       ]
     },
