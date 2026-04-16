@@ -422,6 +422,43 @@
             "podcast",
             "AI工程师"
           ]
+        },
+        {
+          "url": "https://importai.substack.com/feed",
+          "name": "Import AI",
+          "priority": 8,
+          "quality": 9,
+          "tags": [
+            "AI",
+            "newsletter",
+            "政策",
+            "研究",
+            "Jack Clark"
+          ]
+        },
+        {
+          "url": "https://tldr.tech/api/rss/ai",
+          "name": "TLDR AI",
+          "priority": 8,
+          "quality": 8,
+          "tags": [
+            "AI",
+            "newsletter",
+            "工程师",
+            "每日"
+          ]
+        },
+        {
+          "url": "https://bensbites.beehiiv.com/feed",
+          "name": "Ben's Bites",
+          "priority": 7,
+          "quality": 7,
+          "tags": [
+            "AI",
+            "newsletter",
+            "产品",
+            "创业"
+          ]
         }
       ]
     },
