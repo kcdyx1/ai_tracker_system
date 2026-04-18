@@ -226,7 +226,7 @@ def _score_event_v5(
 
     # ── TIER 2: 大厂新品发布 ─────────────────────────────────────
     if score == 0:
-        major_cos = ["苹果", "谷歌", "Google", "Microsoft", "微软", "Meta", "OpenAI", "Anthropic", "英伟达", "NVIDIA", "Apple", "Samsung", "三星", "阿里", "Alibaba", "腾讯", "Tencent", "字节", "ByteDance"]
+        major_cos = ["苹果", "华为", "Google", "Microsoft", "Meta", "OpenAI", "Anthropic", "英伟达", "NVIDIA", "Apple", "Samsung", "阿里", "腾讯", "字节", "ByteDance", "小米", "vivo", "OPPO"]
         for co in major_cos:
             if co.lower() in title.lower() and any(kw in title for kw in ["发布", "推出", "上线", "launch", "release"]):
                 score += 4
