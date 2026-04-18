@@ -182,6 +182,23 @@ def ensure_fts_tables() -> None:
         conn.close()
 
 
+def _fill_arxiv_url(event_title: str, current_url: str) -> str:
+    """
+    后处理纠正：如果 event.source_url 为空但标题含 arXiv 信息，
+    则构造一个合理的 arXiv URL。
+    支持从标题中提取 arXiv ID（如 "arXiv:2604.14223" 或 "arXiv abs/2604.14223"）。
+    """
+    if current_url:
+        return current_url
+    # 从标题中提取 arXiv ID
+    match = re.search(r'arXiv[:\s]*(?:abs/)?(\d{4}\.\d{4,5})', event_title, re.IGNORECASE)
+    if match:
+        return f"https://arxiv.org/abs/{match.group(1)}"
+    if 'arxiv' in event_title.lower():
+        return "https://arxiv.org/"
+    return current_url
+
+
 def save_extraction_result(result) -> None:
     """保存抽取结果到 PostgreSQL"""
     conn = _get_pg_conn()
@@ -261,6 +278,8 @@ def save_extraction_result(result) -> None:
             if event_key in existing_event_keys:
                 continue
             canonical_ids = [id_mapping.get(eid, eid) for eid in event.involved_entity_ids]
+            # ── 后处理纠正：arXiv URL 补全 ────────────────────────────
+            filled_url = _fill_arxiv_url(event.title, event.source_url or "")
             cursor.execute("""
                 INSERT INTO events (id, title, date, published_date, involved_entities_json,
                                     summary, source_url, created_at, risk_level, sentiment)
@@ -269,7 +288,7 @@ def save_extraction_result(result) -> None:
             """, (
                 event.id, event.title, _format_dt(event.date),
                 _format_dt(event.published_date),
-                json.dumps(canonical_ids), event.summary, event.source_url,
+                json.dumps(canonical_ids), event.summary, filled_url,
                 _format_dt(event.created_at),
                 getattr(event, "risk_level", None),
                 getattr(event, "sentiment", None)
