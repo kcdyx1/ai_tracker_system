@@ -335,7 +335,7 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
         WHERE published_date >= %s
           AND published_date <= %s
           AND published_date >= '2019-01-01'
-        ORDER BY published_date DESC
+        ORDER BY created_at DESC
         LIMIT %s
     """, (time_threshold, time_max, max_events))
 
