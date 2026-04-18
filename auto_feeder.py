@@ -323,13 +323,16 @@ class HistoryManager:
 
 
 def load_feeds():
-    """加载feed配置，支持feeds_v2.json的分层结构"""
+    """加载feed配置，支持feeds_v2.json的分层结构
+    返回: (list_of_urls, url_to_name_dict)
+    """
     # 优先使用feeds_v2.json
     if FEEDS_V2_FILE.exists():
         with open(FEEDS_V2_FILE, "r", encoding="utf-8") as f:
             try:
                 v2_data = json.load(f)
                 feeds = []
+                url_to_name = {}
                 tiers = v2_data.get("tiers", {})
                 # 按优先级收集所有feed：core > standard > extended > local
                 tier_order = ["core", "standard", "extended", "aggregated", "local"]
@@ -338,12 +341,14 @@ def load_feeds():
                     tier_feeds = tier.get("feeds", [])
                     for feed in tier_feeds:
                         url = feed.get("url")
+                        name = feed.get("name", url)
                         if url and url not in feeds:
                             feeds.append(url)
-                            log(f"  📦 [{tier_name}] {feed.get('name', url)} - priority:{feed.get('priority', 'N/A')}")
+                            url_to_name[url] = name
+                            log(f"  📦 [{tier_name}] {name} - priority:{feed.get('priority', 'N/A')}")
                 if feeds:
                     log(f"  ✅ 从feeds_v2.json加载了 {len(feeds)} 个源")
-                    return feeds
+                    return feeds, url_to_name
             except Exception as e:
                 log(f"  ⚠️ feeds_v2.json解析失败: {e}")
     # 回退到feeds.json
@@ -353,10 +358,10 @@ def load_feeds():
                 feeds = json.load(f)
                 if feeds:
                     log(f"  ✅ 从feeds.json加载了 {len(feeds)} 个源")
-                    return feeds
+                    return feeds, {url: url for url in feeds}
             except Exception:
                 pass
-    return []
+    return [], {}
 
 
 def load_json_file(filepath: Path, default_val: list) -> list:
@@ -549,7 +554,17 @@ def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -
         return []
 
 
-def send_to_api(url: str, rss_summary: str = "") -> bool:
+def send_to_api(url: str, rss_summary: str = "") -> tuple[bool, str]:
+    """发送URL到后端API进行处理
+    返回: (success, source_name)
+    """
+    from urllib.parse import urlparse
+    # 从URL提取域名作为默认source_name
+    try:
+        domain = urlparse(url).netloc.replace("www.", "").replace("blog.", "")
+    except:
+        domain = url
+
     try:
         payload = {"url": url}
         if rss_summary:
@@ -557,15 +572,16 @@ def send_to_api(url: str, rss_summary: str = "") -> bool:
         resp = requests.post(API_URL, json=payload, timeout=10)
         if resp.status_code == 200:
             log(f"    🎯 成功发射至后端缓冲队列!")
-            return True
+            return True, domain
         log(f"    ⚠️ API 拒绝接收: {resp.status_code}")
-        return False
+        return False, domain
     except requests.exceptions.RequestException as e:
         log(f"    ❌ 通讯阻断: {e}")
-        return False
+        return False, domain
 
 
 def run_auto_feeder():
+    from collections import defaultdict
     log("=" * 60)
     log("🚀 AI Tracker - 战略巡航舰启动 (V4 历史全收录模式, Base: 2023-01-01)")
     log(f"   API URL: {API_URL}")
@@ -573,7 +589,7 @@ def run_auto_feeder():
     log("=" * 60)
 
     log("📡 加载情报源...")
-    feeds = load_feeds()
+    feeds, url_to_name = load_feeds()
     if not feeds:
         log("❌ 弹药库 (feeds.json 和 feeds_v2.json) 都为空！")
         return
@@ -583,13 +599,17 @@ def run_auto_feeder():
     log(f"   📜 已加载 {len(history)} 条历史记录")
 
     total_pushed = 0
+    total_failed = 0
+    # 按来源统计入库数量
+    by_source = defaultdict(int)
 
     # 增量更新：加载每个feed的最后抓取时间
     feed_metadata = load_feed_metadata()
     new_metadata = dict(feed_metadata)  # 复制一份用于更新
 
     for feed_url in feeds:
-        log(f"\n📡 正在扫描空域: {feed_url}")
+        feed_name = url_to_name.get(feed_url, feed_url)
+        log(f"\n📡 正在扫描空域: {feed_name}")
         last_crawl = feed_metadata.get(feed_url)
         if last_crawl:
             log(f"   ⏰ 上次抓取: {last_crawl}，增量模式")
@@ -602,9 +622,13 @@ def run_auto_feeder():
             url = item["url"]
             rss_summary = item.get("rss_summary", "")
             log(f"    -> 锁定目标: {url}")
-            if send_to_api(url, rss_summary):
+            success, source = send_to_api(url, rss_summary)
+            if success:
                 history.add(url)
                 total_pushed += 1
+                by_source[source] += 1
+            else:
+                total_failed += 1
             time.sleep(0.5)  # 控制并发避免打挂后端
 
         # 修复：在所有URL处理完成后再更新时间戳
@@ -615,6 +639,19 @@ def run_auto_feeder():
     history.save()
     save_feed_metadata(new_metadata)
 
+    # ── V4.1 每日采集报告 ───────────────────────────────────────────
+    log("")
+    log("=" * 60)
+    log("📊 每日采集报告")
+    log(f"   总计推送: {total_pushed + total_failed} 条 URL")
+    log(f"   成功入队: {total_pushed} 条")
+    log(f"   入队失败: {total_failed} 条")
+    if by_source:
+        log("")
+        log("   各源入库情况:")
+        for source, count in sorted(by_source.items(), key=lambda x: -x[1]):
+            status = "✅" if count > 0 else "⚠️"
+            log(f"     {status} {source}: {count} 条")
     log("=" * 60)
     log(f"🎉 巡航结束！本次成功向 V8 引擎输送了 {total_pushed} 篇情报。")
     log(f"   当前历史记录总数: {len(history)}")

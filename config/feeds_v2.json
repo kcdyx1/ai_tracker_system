@@ -24,17 +24,6 @@
           ]
         },
         {
-          "url": "https://arxiv.org/rss/cs.LG",
-          "name": "arXiv CS.LG",
-          "priority": 9,
-          "quality": 9,
-          "tags": [
-            "research",
-            "paper",
-            "ml"
-          ]
-        },
-        {
           "url": "https://openai.com/blog/rss.xml",
           "name": "OpenAI Blog",
           "priority": 10,
@@ -170,6 +159,42 @@
             "ai",
             "weekly",
             "curated"
+          ]
+        },
+        {
+          "url": "https://www.llamaindex.ai/blog/rss.xml",
+          "name": "LlamaIndex Blog",
+          "priority": 9,
+          "quality": 5,
+          "tags": [
+            "RAG",
+            "框架",
+            "官方",
+            "LlamaIndex"
+          ]
+        },
+        {
+          "url": "https://qwenlm.github.io/blog/index.xml",
+          "name": "Qwen Blog",
+          "priority": 10,
+          "quality": 5,
+          "tags": [
+            "大模型",
+            "官方",
+            "开源",
+            "Qwen"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:1200/dify/blog",
+          "name": "Dify Blog",
+          "priority": 9,
+          "quality": 5,
+          "tags": [
+            "Agent框架",
+            "官方",
+            "开源",
+            "Dify"
           ]
         }
       ]

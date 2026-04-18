@@ -65,7 +65,7 @@ def create_extractor():
     return _get_extractor()
 
 
-def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionResult:
+def extract_knowledge(text: str, context_entities_str: str = "", source_url: str = "") -> ExtractionResult:
     """
     从文本中提取知识
 
@@ -102,6 +102,10 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 - 在生成 Events 和 Relationships 时，source_id, target_id 和 involved_entity_ids 必须严格使用你刚才为实体生成的这些 ID
 - 绝对不能使用实体名称，必须使用 ID！
 
+【重要】source_url 要求：
+- 如果提供了 source_url（信息来源链接），则必须将其填充到每个 Event 对象的 source_url 字段中
+- source_url 即上下文中的 url，不得为空
+
 【重要】内容限制：
 - 如果文本内容极其丰富，请专注于提取「最具代表性」的 15 个实体和 5 个核心事件，确保 JSON 结构的完整性。不要试图穷尽所有细节。
 
@@ -111,6 +115,11 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
 
 请严格按照JSON格式返回结果。"""
 
+    # 构建 user prompt，包含 source_url 信息
+    user_content = f"请从以下文本中提取知识：\n\n{text}"
+    if source_url:
+        user_content += f"\n\n【信息来源】{source_url}"
+
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
         model="MiniMax-M2.7-highspeed",
@@ -119,7 +128,7 @@ def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionRe
         messages=[
             {
                 "role": "user",
-                "content": f"请从以下文本中提取知识：\n\n{text}"
+                "content": user_content
             }
         ],
         response_model=ExtractionResult,
@@ -200,7 +209,7 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
     result.events = valid_events
     return result
 
-def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool = False) -> ExtractionResult:
+def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool = False, source_url: str = "") -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
 

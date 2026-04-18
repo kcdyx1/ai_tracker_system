@@ -81,7 +81,7 @@ def process_intel_task(self, task_id: int, url: str, rss_summary: str = ""):
 
         # 3. 呼叫大模型进行信息榨取
         for i, chunk in enumerate(chunks):
-            result = extract_with_validation(chunk)
+            result = extract_with_validation(chunk, source_url=url)
             if result.entities or result.events:
                 save_extraction_result(result)
                 total_ent += len(result.entities)
@@ -121,7 +121,7 @@ def process_intel_task(self, task_id: int, url: str, rss_summary: str = ""):
             chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size - overlap)]
             total_ent, total_evt = 0, 0
             for i, chunk in enumerate(chunks):
-                result = extract_with_validation(chunk)
+                result = extract_with_validation(chunk, source_url=url)
                 if result.entities or result.events:
                     save_extraction_result(result)
                     total_ent += len(result.entities)
