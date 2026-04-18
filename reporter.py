@@ -10,7 +10,7 @@ LLM生成(style_prompt) → 飞书推送(feishu) + 微信草稿箱(wechat)
 import os
 import sys
 import json
-import sqlite3
+import psycopg2
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,6 +42,15 @@ def log(*args, **kwargs):
 
 # ── 环境变量 ──────────────────────────────────────────────────────────────
 load_dotenv()
+
+PG_CONFIG = {
+    "host": "172.20.0.4",
+    "port": 5432,
+    "user": "postgres",
+    "password": "difyai123456",
+    "database": "ai_tracker",
+}
+
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
 # ── LLM 客户端 ────────────────────────────────────────────────────────────
@@ -110,17 +119,17 @@ def _retrieve_entity_history(entity_name: str, days: int = 90) -> str:
     查询某实体近 N 天的相关事件摘要。
     返回格式化的历史轨迹字符串，如无记录返回空字符串。
     """
-    db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
-    if not os.path.exists(db_path):
-        return ""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    try:
+        conn = psycopg2.connect(**PG_CONFIG)
+        cursor = conn.cursor()
+    except Exception:
+        return f"- {entity_name}：近{days}天无重大动作记录"
     time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
     cursor.execute("""
         SELECT title, published_date
         FROM events
-        WHERE published_date >= ?
-          AND (title LIKE ? OR summary LIKE ?)
+        WHERE published_date >= %s
+          AND (title ILIKE %s OR summary ILIKE %s)
         ORDER BY published_date DESC
         LIMIT 5
     """, (time_threshold, f"%{entity_name[:4]}%", f"%{entity_name[:4]}%"))
@@ -128,7 +137,7 @@ def _retrieve_entity_history(entity_name: str, days: int = 90) -> str:
     conn.close()
     if not rows:
         return f"- {entity_name}：近{days}天无重大动作记录"
-    summaries = [f"{r[1][:10]}：{r[0][:30]}" for r in rows[:3]]
+    summaries = [f"{str(r[1])[:10]}：{str(r[0])[:30]}" for r in rows[:3]]
     return f"- {entity_name}：{'；'.join(summaries)}"
 
 

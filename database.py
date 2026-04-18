@@ -23,7 +23,6 @@ PG_PASSWORD = os.environ.get("AI_TRACKER_PG_PASSWORD", "difyai123456")
 PG_DATABASE = os.environ.get("AI_TRACKER_PG_DATABASE", "ai_tracker")
 
 # SQLite 兼容层路径（用于迁移）
-SQLITE_DB_PATH = Path(__file__).parent / "ai_tracker.db"
 
 
 def _get_pg_conn():
