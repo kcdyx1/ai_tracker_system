@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-情报筛选与权重排序器 (intelligence_selector) V4.2
-从数据库拉取事件 → 综合评分 → P0/P1/P2 截断 → 输出精简 JSON
+情报筛选与权重排序器 (intelligence_selector) V5.0
+严格按照产业优先级评分，确保大模型/Agent/平台/投资/收购等核心内容不遗漏
 
-V4.2 改动：
-- 综合评分：将 risk_level、sentiment、来源权重、关键词、模型发布 全部纳入同一评分
-- 不再依赖 LIMIT 硬截断，而是对全部事件评分后排序截断
-- 确保高价值信息不因时间窗口边界被遗漏
+V5.0 评分维度（按优先级排序）：
+  TIER 1（最重要）: 新大模型发布 +5, 新Agent框架 +4, 新技术产品 +4, 新数据平台 +3
+  TIER 2（重要）  : 投资/收购 +5, 高管变动 +3, 新产品发布 +4
+  TIER 3（加分）  : 官方博客 +3, 技术媒体 +2, arXiv -3, 高危风险 +3
+  截断规则        : P0上限20条（保证核心信息不遗漏），P1上限10条，P2上限30条
 """
 
 import os
@@ -22,70 +23,128 @@ PG_CONFIG = {
     "database": "ai_tracker",
 }
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 try:
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
-    from collector import _BLOCK_KW, _P0_KW, _P1_KW, _P2_KW, _DEEP_TECH_KW, _AI_KW, _DATA_KW
+    from collector import _BLOCK_KW
 except ImportError:
     _BLOCK_KW = []
-    _P0_KW = []
-    _P1_KW = []
-    _P2_KW = []
-    _DEEP_TECH_KW = []
-    _AI_KW = []
-    _DATA_KW = []
 
-# ── V4.1 来源权重 ─────────────────────────────────────────────────────────────
-_SOURCE_WEIGHTS = {
-    "openai.com/blog": 5, "anthropic.com/news": 5, "anthropic.com/blog": 5,
-    "deepmind.google": 5, "mistral.ai/news": 5, "mistral.ai/blog": 5,
-    "ai.meta.com/blog": 5, "blog.google/technology/ai": 5, "blogs.nvidia.com": 5,
-    "qwenlm.github.io/blog": 5, "deepseek.com": 5, "modelscope.cn": 5,
-    "zhipuai.cn": 5, "wenxin.baidu.com": 5, "xinghuo.xfyun.cn": 5,
-    "moonshot.cn": 5, "siliconflow.cn": 5, "bilong.cn": 5,
-    "langchain.dev/blog": 4, "llamaindex.ai/blog": 4, "docs.crewai.com": 4,
-    "microsoft.github.io/autogen": 4, "docs.dify.ai": 4, "coze.cn/docs": 4,
-    "coze.com/docs": 4, "vllm.ai/blog": 3, "modal.com/blog": 3,
-    "wandb.ai/blog": 3, "cohere.com/blog": 3, "stability.ai/news": 3,
-    "lancedb.github.io": 3, "clickhouse.com/blog": 3, "databricks.com/blog": 3,
-    "importai.substack.com": 3, "latent.space": 3, "tldr.tech": 3,
-    "bensbites.beehiiv.com": 3, "drfeeds.com/thebatch": 3,
-    "stratechery.com": 3, "pragmaticengineer.com": 3,
-    "arxiv.org": -3,
-    "ithome.com": 0, "36kr.com": 0, "tmtpost.com": 0,
-    "woshipm.com": 0, "aibase.com": 0,
-}
-
-_TECH_NEWSLETTER_DOMAINS = {
-    "importai.substack.com", "latent.space", "tldr.tech",
-    "bensbites.beehiiv.com", "drfeeds.com/thebatch",
-}
-
-# ── V4.1 模型发布正则 ─────────────────────────────────────────────────────────
-_MODEL_RELEASE_PATTERNS = [
-    re.compile(r'\b(GPT|Claude|Gemini|Llama|Mistral|Grok|Arctic)\s*-?\s*\d', re.I),
-    re.compile(r'\b(Qwen|DeepSeek|Kimi|GLM|ERNIE|星火|通义千问|文心一言|豆包|百川|MiniCPM|Yi)\s*-?\s*\d', re.I),
-    re.compile(r'\b(release|launch|发布|开源|open[- ]?source|新版|新版本|正式上线)\b', re.I),
-    re.compile(r'\b(v\d+\.\d+|version\s*\d+)\b', re.I),
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: 新大模型发布（最高优先级）
+# ─────────────────────────────────────────────────────────────────────────────
+_MODEL_MAJOR_PATTERNS = [
+    # 国外大模型
+    re.compile(r'\b(GPT[-\s]?\d[\.\d]*|Claude[-\s]?\d[\.\d]*|Gemini[-\s]?\d[\.\d]*)\b', re.I),
+    re.compile(r'\b(Llama\s*\d[\.\d]*|Mistral\s*\d[\.\d]*|Grok\s*\d[\.\d]*|Arctic\s*\w+)\b', re.I),
+    re.compile(r'\b(Phi[-\s]?\d[\.\d]*|DaLL[\s-]?E|Stable\s*Diffusion|Flux\s*\w+)\b', re.I),
+    re.compile(r'\b(Sora[-\s]?\d?|Runway\s*\w+|Veo\s*\d?|Luma\s*\w+|Kling\s*\w+)\b', re.I),
+    # 国内大模型
+    re.compile(r'\b(Qwen[\s/-]?\d[\.\d]*|DeepSeek[\s/-]?\w+|Kimi[\s/-]?\w+)\b', re.I),
+    re.compile(r'\b(GLM[\s/-]?\d[\.\d]*|ERNIE[\s/-]?\d[\.\d]*|Yi[\s/-]?\w+)\b', re.I),
+    re.compile(r'\b(通义千问|文心一言|豆包|百川|星火|混元)\s*\w*', re.I),
+    re.compile(r'\b(MiniCPM|MiniMax|Abab|Seqke|01\s*AI|零一|万物)\b', re.I),
+    # 新模型发布关键词
+    re.compile(r'\b(发布|开源|launch|release|正式上线|v\d+[\.\d]+)\s*(模型|model|llm|assistant)\b', re.I),
 ]
 
-def _get_source_weight(source_url: str) -> int:
-    if not source_url:
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: 新Agent框架/平台
+# ─────────────────────────────────────────────────────────────────────────────
+_AGENT_FRAMEWORK_PATTERNS = [
+    re.compile(r'\b(LangChain|LlamaIndex|CrewAI|AutoGen|Dify|Coze|Mastra|Besen)\b', re.I),
+    re.compile(r'\b(OpenAI\s*Assistants|OpenAI\s*Agents|GPT[\s-]?Agent|Claude\s*Agent)\b', re.I),
+    re.compile(r'\b(Agent\s*Framework|Agent\s*SDK|Multi[\s-]?Agent|Agentic\s*RAG)\b', re.I),
+    re.compile(r'\b(MCP[\s-]?Server|MCP[\s-]?Protocol|Model\s*Context\s*Protocol)\b', re.I),
+    re.compile(r'\b( CrewAI|Autogen|Goverse|Cognify|ShellAgent)\b', re.I),
+    # 国内Agent平台
+    re.compile(r'\b(Dify|Coze|扣子|钉钉\s*AI|飞书\s*AI|百度\s*Agent|通义百宝)\b', re.I),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: 新技术产品/数据平台/Infra
+# ─────────────────────────────────────────────────────────────────────────────
+_NEW_PRODUCT_PATTERNS = [
+    re.compile(r'\b(Vector\s*DB|Vector\s*Database|向量数据库)\b', re.I),
+    re.compile(r'\b(Chroma|Pinecone|Weaviate|Qdrant|Milvus|MongoDB\s*Vector)\b', re.I),
+    re.compile(r'\b(LLM\s*Ops|MLOps|RAG\s*Framework|RAG\s*System)\b', re.I),
+    re.compile(r'\b(vLLM|Ollama|TGI|Text[\s-]?Generation[\s-]?Inference)\b', re.I),
+    re.compile(r'\b(Hugging\s*Face\s*Endpoints|Replicate|groq|mistral\.(ai/chat))\b', re.I),
+    re.compile(r'\b(Data\s*Platform|数据平台|分析平台|BI\s*Platform)\b', re.I),
+    re.compile(r'\b(AI\s*Search|Search\s*Engine|Search\s*Platform|搜索平台)\b', re.I),
+    re.compile(r'\b(Benchmark\s*发布|Benchmark|评测基准|评估基准)\b', re.I),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 2: 投资/收购/高管变动
+# ─────────────────────────────────────────────────────────────────────────────
+_INVESTMENT_ACQ_PATTERNS = [
+    re.compile(r'\b(融资|投资|inves?t?|funding|raise[d]?|series\s+[A-Z]|A轮|B轮|C轮)\b', re.I),
+    re.compile(r'\b(收购|acqui[r]?|merger|并购|买|战略投资)\b', re.I),
+    re.compile(r'\b(估值|valuation|亿美元|\$[\d\.]+[MB])\b', re.I),
+]
+
+_MGMT_CHANGE_PATTERNS = [
+    re.compile(r'\b(任命|聘用|hire|appoint|CEO|CTO|CFO|COO|总裁|总经理|副总裁)\b', re.I),
+    re.compile(r'\b(离职|leave|exit|resign|quit|joined?\s+(Google|Microsoft|OpenAI|Anthropic|Meta))\b', re.I),
+    re.compile(r'\b(创始人|founder|co[\s-]?founder|CEO\s+离职|核心团队变动)\b', re.I),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 2: 新产品发布（非模型）
+# ─────────────────────────────────────────────────────────────────────────────
+_NEW_LAUNCH_PATTERNS = [
+    re.compile(r'\b(发布|launch|release|推出|上线|新版|new\s+product)\b', re.I),
+    re.compile(r'\b(正式开放|public[\s-]?beta|open[\s-]?beta|GA|general\s*availability)\b', re.I),
+    re.compile(r'\b(API\s*发布|API\s*launch|SDK\s*发布|platform\s*launch)\b', re.I),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 来源权重
+# ─────────────────────────────────────────────────────────────────────────────
+_SOURCE_WEIGHTS = {
+    # 官方博客 - 最高权重
+    "openai.com/blog": 5, "openai.com/research": 5,
+    "anthropic.com/news": 5, "anthropic.com/blog": 5,
+    "deepmind.google": 5, "ai.meta.com/blog": 5,
+    "blog.google/technology/ai": 5, "blogs.nvidia.com": 5,
+    "mistral.ai/news": 5, "mistral.ai/blog": 5,
+    # 国内模型官方
+    "qwenlm.github.io/blog": 5, "deepseek.com": 5,
+    "modelscope.cn": 5, "zhipuai.cn": 5,
+    "wenxin.baidu.com": 5, "xinghuo.xfyun.cn": 5,
+    "moonshot.cn": 5, "siliconflow.cn": 5, "bilong.cn": 5,
+    # Agent框架官方
+    "langchain.dev/blog": 4, "llamaindex.ai/blog": 4,
+    "docs.crewai.com": 4, "microsoft.github.io/autogen": 4,
+    "docs.dify.ai": 4, "coze.cn/docs": 4, "coze.com/docs": 4,
+    # Infra/数据平台
+    "vllm.ai/blog": 3, "modal.com/blog": 3,
+    "wandb.ai/blog": 3, "cohere.com/blog": 3,
+    "stability.ai/news": 3, "lancedb.github.io": 3,
+    "clickhouse.com/blog": 3, "databricks.com/blog": 3,
+    "pinecone.io/blog": 3, "qdrant.io/blog": 3,
+    # 优质newsletter
+    "importai.substack.com": 3, "latent.space": 3,
+    "tldr.tech": 3, "bensbites.beehiiv.com": 3,
+    "drfeeds.com/thebatch": 3, "stratechery.com": 3,
+    # arXiv - 降权
+    "arxiv.org": -3,
+}
+
+def _get_source_weight(url: str) -> int:
+    if not url:
         return 0
-    url_lower = source_url.lower()
+    url_lower = url.lower()
     for domain, weight in _SOURCE_WEIGHTS.items():
         if domain in url_lower:
             return weight
     return 0
 
-def _is_model_release(title: str, summary: str) -> bool:
-    text = title + " " + summary
-    return any(p.search(text) for p in _MODEL_RELEASE_PATTERNS)
-
-def _is_paper_source(source_url: str) -> bool:
-    return "arxiv.org" in (source_url or "").lower()
+def _is_paper_source(url: str) -> bool:
+    return "arxiv.org" in (url or "").lower()
 
 def _is_suspicious_future_date(pub_date_str: str) -> bool:
     if not pub_date_str:
@@ -99,23 +158,27 @@ def _is_suspicious_future_date(pub_date_str: str) -> bool:
     except Exception:
         return False
 
-# ── V4.2 综合评分函数 ─────────────────────────────────────────────────────────
-def _score_event_comprehensive(
+# ─────────────────────────────────────────────────────────────────────────────
+# V5.0 综合评分
+# ─────────────────────────────────────────────────────────────────────────────
+def _score_event_v5(
     title: str,
     summary: str,
     source_url: str,
     risk_level: str,
     sentiment: str,
-) -> tuple:
+) -> tuple[str, int]:
     """
-    V4.2 综合评分：所有评分信号加权求和，输出 (priority, score).
+    V5.0 综合评分，严格按产业优先级：
 
-    评分维度：
-    1. 关键词命中（与V4.1相同）
-    2. 来源权重（V4.1，arxiv -3）
-    3. 模型发布（V4.1，+2）
-    4. risk_level（V4.2新增）：高危/中风险/低风险/无风险 → +3/+1/+0/+0
-    5. sentiment（V4.2新增）：利空 → +2，利好 → +1
+    TIER 1（最重要）: 新大模型发布 +5, 新Agent框架 +4, 新技术产品 +3
+    TIER 2（重要）  : 投资/收购 +5, 高管变动 +3, 新产品发布 +3
+    TIER 3（来源）  : 官方博客 +3, 技术媒体 +1, arXiv -3
+    TIER 4（风险）  : 高危 +3, 中风险 +1; 利空 +2, 利好 +1
+
+    P0: 综合分 >= 3
+    P1: 综合分 1-2
+    P2: 其他
     """
     text = (title + " " + (summary or "")).lower()
     url_lower = (source_url or "").lower()
@@ -125,89 +188,97 @@ def _score_event_comprehensive(
         if kw.lower() in text:
             return "BLOCK", 0
 
-    # ── 维度1: 关键词评分 ────────────────────────────────────────────
-    base_score = 0
-    base_score += sum(1 for kw in _P0_KW if kw.lower() in text)
-    deep_tech_hits = sum(1 for kw in _DEEP_TECH_KW if kw.lower() in text)
-    base_score += deep_tech_hits
-    if deep_tech_hits >= 2:
-        base_score += 2
+    score = 0
+    bonus_tags = []
 
-    has_ai = any(kw.lower() in text for kw in _AI_KW)
-    has_data = any(kw.lower() in text for kw in _DATA_KW)
-    if has_ai and has_data:
-        base_score += 3
-    if any(kw.lower() in text for kw in {"Agent", "agent", "智能体", "自主", "automation"}) and \
-       any(kw.lower() in text for kw in {"知识库", "数据库", "RAG", "检索", "memory"}):
-        base_score += 2
+    # ── TIER 1: 新大模型发布（最重要）────────────────────────────────
+    for p in _MODEL_MAJOR_PATTERNS:
+        if p.search(title) or p.search(summary[:200] if summary else ""):
+            score += 5
+            bonus_tags.append("大模型发布")
+            break
 
-    # ── 维度2: 来源权重 ──────────────────────────────────────────────
+    # ── TIER 1: 新Agent框架 ───────────────────────────────────────
+    for p in _AGENT_FRAMEWORK_PATTERNS:
+        if p.search(title) or p.search(summary[:200] if summary else ""):
+            score += 4
+            bonus_tags.append("Agent框架")
+            break
+
+    # ── TIER 1: 新技术产品/数据平台 ───────────────────────────────
+    for p in _NEW_PRODUCT_PATTERNS:
+        if p.search(title) or p.search(summary[:200] if summary else ""):
+            score += 3
+            bonus_tags.append("新技术产品")
+            break
+
+    # ── TIER 2: 投资/收购 ─────────────────────────────────────────
+    for p in _INVESTMENT_ACQ_PATTERNS:
+        if p.search(title):
+            score += 5
+            bonus_tags.append("投资/收购")
+            break
+
+    # ── TIER 2: 高管变动 ─────────────────────────────────────────
+    for p in _MGMT_CHANGE_PATTERNS:
+        if p.search(title):
+            score += 3
+            bonus_tags.append("高管变动")
+            break
+
+    # ── TIER 2: 新产品发布 ───────────────────────────────────────
+    for p in _NEW_LAUNCH_PATTERNS:
+        if p.search(title):
+            score += 3
+            bonus_tags.append("新产品发布")
+            break
+
+    # ── TIER 3: 来源权重 ─────────────────────────────────────────
     source_weight = _get_source_weight(source_url)
-    base_score += source_weight
+    score += source_weight
 
-    if any(d in url_lower for d in _TECH_NEWSLETTER_DOMAINS):
-        base_score += 3
-
-    # ── 维度3: 模型发布 ──────────────────────────────────────────────
-    if _is_model_release(title, summary or ""):
-        base_score += 2
-
-    # ── 维度4: risk_level（V4.2核心新增）─────────────────────────────
-    # 高危事件 +3，中风险 +1（负面风险本身是重要信号）
-    risk_bonus = 0
+    # ── TIER 4: 风险信号 ─────────────────────────────────────────
     if risk_level == "高危":
-        risk_bonus = 3
+        score += 3
     elif risk_level == "中风险":
-        risk_bonus = 1
+        score += 1
 
-    # ── 维度5: sentiment（V4.2核心新增）───────────────────────────────
-    # 利空 +2（负面信号需要被重视），利好 +1
-    sentiment_bonus = 0
     if sentiment == "利空":
-        sentiment_bonus = 2
+        score += 2
     elif sentiment == "利好":
-        sentiment_bonus = 1
+        score += 1
 
-    total_score = base_score + risk_bonus + sentiment_bonus
-
-    # ── 优先级判定 ────────────────────────────────────────────────────
-    # 高危利空事件直接 P0
-    if risk_level == "高危" and sentiment == "利空":
-        return "P0", total_score + 5  # 额外加权
-
-    if total_score >= 2:
-        return "P0", total_score
-    elif total_score >= 1:
-        return "P1", total_score
-    elif has_ai:
-        return "P1", 1
+    # ── 优先级判定 ─────────────────────────────────────────────────
+    if score >= 3:
+        return "P0", score
+    elif score >= 1:
+        return "P1", score
     else:
-        return "P2", 0
+        return "P2", score
 
 
-def select_and_rank_events(days: int = 1, max_events: int = 300) -> dict:
+def select_and_rank_events(days: int = 1) -> Dict[str, Any]:
     """
-    主函数：从 PostgreSQL 拉取事件，综合评分 + 截断，返回精简列表。
+    V5.0 主函数：查询所有事件 → 综合评分 → 排序截断 → 返回结果
 
-    V4.2 评分规则（综合评分制）：
-    - 综合分 = 关键词分(0-15) + 来源权重(-3~+5) + 模型发布(+2) + risk_level(+0~+3) + sentiment(+0~+2)
-    - P0：综合分 ≥ 2，最多 15 条，其中 arXiv 论文最多 1 篇
-    - P1：综合分 = 1，最多 5 条
-    - P2：综合分 = 0 或无AI关键词，最多 20 条
-    - 可疑未来日期（>30天）：直接降入 P2
+    截断规则：
+    - P0: 最多 20 条（保证核心不遗漏）
+    - P1: 最多 10 条
+    - P2: 最多 30 条（仅保留有参考价值的事件）
+    - future date (>30天): 降入 P2
     """
     try:
         conn = psycopg2.connect(**PG_CONFIG)
         cursor = conn.cursor()
     except Exception as e:
         import logging
-        logging.warning(f"[Selector] PostgreSQL connection failed: {e}, falling back to empty")
-        return {"p0": [], "p1": [], "p2_brief": [], "total_scored": 0}
+        logging.warning(f"[Selector] PG connection failed: {e}")
+        return {"p0": [], "p1": [], "p2_brief": [], "total": 0}
 
-    time_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    time_max = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    now_utc = datetime.now(timezone.utc)
+    threshold = (now_utc - timedelta(days=days)).isoformat()
+    max_date = (now_utc + timedelta(days=7)).isoformat()
 
-    # V4.2: 查询全部事件，不做 LIMIT 截断
     cursor.execute("""
         SELECT id, title, summary, source_url, published_date, risk_level, sentiment
         FROM events
@@ -215,25 +286,20 @@ def select_and_rank_events(days: int = 1, max_events: int = 300) -> dict:
           AND published_date <= %s
           AND published_date >= '2019-01-01'
         ORDER BY published_date DESC
-    """, (time_threshold, time_max))
+    """, (threshold, max_date))
 
     rows = cursor.fetchall()
     conn.close()
 
-    p0_events = []
-    p1_events = []
-    p2_events = []
+    p0_events, p1_events, p2_events = [], [], []
 
     for row in rows:
         event_id, title, summary, source_url, pub_date, risk, sentiment = row
-        priority, score = _score_event_comprehensive(
-            title, summary or "", source_url or "", risk, sentiment
-        )
+        priority, score = _score_event_v5(title, summary or "", source_url or "", risk, sentiment)
 
         if priority == "BLOCK":
             continue
 
-        # 可疑未来日期降级
         is_future = _is_suspicious_future_date(pub_date)
         if is_future:
             priority = "P2"
@@ -259,31 +325,31 @@ def select_and_rank_events(days: int = 1, max_events: int = 300) -> dict:
         else:
             p2_events.append(event_dict)
 
-    # ── V4.2 综合分数排序 ────────────────────────────────────────────
+    # ── 排序（综合分降序）──────────────────────────────────────────
     p0_events.sort(key=lambda x: x["_score"], reverse=True)
     p1_events.sort(key=lambda x: x["_score"], reverse=True)
     p2_events.sort(key=lambda x: x["_score"], reverse=True)
 
-    # ── V4.2 论文截断 ────────────────────────────────────────────────
-    p0_papers = [e for e in p0_events if _is_paper_source(e.get("source_url", "")) and not e.get("_future_date")]
-    p0_industry = [e for e in p0_events if not _is_paper_source(e.get("source_url", "")) and not e.get("_future_date")]
-    p0_future = [e for e in p0_events if e.get("_future_date")]
+    # ── 截断 ─────────────────────────────────────────────────────
+    # P0: 最多20条，允许最多2篇论文
+    p0_papers = [e for e in p0_events if _is_paper_source(e.get("source_url", ""))]
+    p0_industry = [e for e in p0_events if not _is_paper_source(e.get("source_url", ""))]
+    papers_to_p0 = p0_papers[:2]  # 最多2篇论文
+    papers_to_p1 = p0_papers[2:]  # 其余论文降入P1
 
-    papers_to_promote = p0_papers[:1]
-    papers_to_demote = p0_papers[1:]
-    p0_industry = p0_industry[:12]
-    p0_events = p0_industry + papers_to_promote
-    p0_events = p0_events[:15]
+    p0_industry = p0_industry[:18]  # 18条产业 + 2篇论文 = 20
+    final_p0 = (p0_industry + papers_to_p0)[:20]
 
-    p1_events = (papers_to_demote + p1_events)[:5]
-    p2_events = p2_events + p0_future
-    p2_events = p2_events[:20]
+    # P1: 最多10条
+    final_p1 = (papers_to_p1 + p1_events)[:10]
 
-    p2_brief = [e for e in p2_events if e.get("_score", 0) == 0]
+    # P2 brief: 最多30条
+    final_p2 = p2_events[:30]
+    p2_brief = [e for e in final_p2]
 
     return {
-        "p0": p0_events,
-        "p1": p1_events,
+        "p0": final_p0,
+        "p1": final_p1,
         "p2_brief": p2_brief,
-        "total_scored": len(rows),
+        "total": len(rows),
     }
