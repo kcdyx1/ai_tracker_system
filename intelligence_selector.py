@@ -170,10 +170,9 @@ def _score_event_v5(
 ) -> tuple[str, int]:
     """
     V5.0 综合评分，严格按产业优先级：
-
     TIER 1（最重要）: 新大模型发布 +5, 新Agent框架 +4, 新技术产品 +3
-    TIER 2（重要）  : 投资/收购 +5, 高管变动 +3, 新产品发布 +3
-    TIER 3（来源）  : 官方博客 +3, 技术媒体 +1, arXiv -3
+    TIER 2（重要）  : 投资/收购 +5, 高管变动 +3, 大厂新品 +4
+    TIER 3（来源）  : 官方博客 +3, 有URL +2, arXiv -3
     TIER 4（风险）  : 高危 +3, 中风险 +1; 利空 +2, 利好 +1
 
     P0: 综合分 >= 3
@@ -182,6 +181,7 @@ def _score_event_v5(
     """
     text = (title + " " + (summary or "")).lower()
     url_lower = (source_url or "").lower()
+    is_paper = _is_paper_source(source_url)
 
     # Blocklist
     for kw in _BLOCK_KW:
@@ -189,53 +189,56 @@ def _score_event_v5(
             return "BLOCK", 0
 
     score = 0
-    bonus_tags = []
 
     # ── TIER 1: 新大模型发布（最重要）────────────────────────────────
     for p in _MODEL_MAJOR_PATTERNS:
         if p.search(title) or p.search(summary[:200] if summary else ""):
             score += 5
-            bonus_tags.append("大模型发布")
             break
 
-    # ── TIER 1: 新Agent框架 ───────────────────────────────────────
-    for p in _AGENT_FRAMEWORK_PATTERNS:
-        if p.search(title) or p.search(summary[:200] if summary else ""):
-            score += 4
-            bonus_tags.append("Agent框架")
-            break
+    # ── TIER 1: 新Agent框架 ─────────────────────────────────────────
+    if score == 0:  # only if not already scored as model
+        for p in _AGENT_FRAMEWORK_PATTERNS:
+            if p.search(title) or p.search(summary[:200] if summary else ""):
+                score += 4
+                break
 
-    # ── TIER 1: 新技术产品/数据平台 ───────────────────────────────
-    for p in _NEW_PRODUCT_PATTERNS:
-        if p.search(title) or p.search(summary[:200] if summary else ""):
-            score += 3
-            bonus_tags.append("新技术产品")
-            break
+    # ── TIER 1: 新技术产品/数据平台 ────────────────────────────────
+    if score == 0:
+        for p in _NEW_PRODUCT_PATTERNS:
+            if p.search(title) or p.search(summary[:200] if summary else ""):
+                score += 3
+                break
 
-    # ── TIER 2: 投资/收购 ─────────────────────────────────────────
-    for p in _INVESTMENT_ACQ_PATTERNS:
-        if p.search(title):
+    # ── TIER 2: 投资/收购（显式金额）───────────────────────────────
+    invest_text = title.lower()
+    if any(kw in invest_text for kw in ["亿美元", "亿美元", "$", "亿美元", "万亿美元", "百万美元"]):
+        if any(kw in invest_text for kw in ["融资", "投资", "收购", "合作", "inves", "funding", "acqui", "acquire"]):
             score += 5
-            bonus_tags.append("投资/收购")
-            break
+        elif any(kw in invest_text for kw in ["亿美元", "亿美元", "万亿美元"]):
+            score += 3  # explicit dollar amount
 
     # ── TIER 2: 高管变动 ─────────────────────────────────────────
     for p in _MGMT_CHANGE_PATTERNS:
         if p.search(title):
             score += 3
-            bonus_tags.append("高管变动")
             break
 
-    # ── TIER 2: 新产品发布 ───────────────────────────────────────
-    for p in _NEW_LAUNCH_PATTERNS:
-        if p.search(title):
-            score += 3
-            bonus_tags.append("新产品发布")
-            break
+    # ── TIER 2: 大厂新品发布 ─────────────────────────────────────
+    if score == 0:
+        major_cos = ["苹果", "谷歌", "Google", "Microsoft", "微软", "Meta", "OpenAI", "Anthropic", "英伟达", "NVIDIA", "Apple", "Samsung", "三星", "阿里", "Alibaba", "腾讯", "Tencent", "字节", "ByteDance"]
+        for co in major_cos:
+            if co.lower() in title.lower() and any(kw in title for kw in ["发布", "推出", "上线", "launch", "release"]):
+                score += 4
+                break
 
     # ── TIER 3: 来源权重 ─────────────────────────────────────────
     source_weight = _get_source_weight(source_url)
     score += source_weight
+
+    # 有URL来源加分（弥补URL缺失问题）
+    if source_url and source_url.strip() and not is_paper:
+        score += 2
 
     # ── TIER 4: 风险信号 ─────────────────────────────────────────
     if risk_level == "高危":
@@ -255,7 +258,6 @@ def _score_event_v5(
         return "P1", score
     else:
         return "P2", score
-
 
 def select_and_rank_events(days: int = 1) -> Dict[str, Any]:
     """
