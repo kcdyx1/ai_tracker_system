@@ -12,7 +12,15 @@ V4.1 改动：
 import os
 import re
 import json
-import sqlite3
+import psycopg2
+
+PG_CONFIG = {
+    "host": "172.20.0.4",
+    "port": 5432,
+    "user": "postgres",
+    "password": "difyai123456",
+    "database": "ai_tracker",
+}
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -311,23 +319,25 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     - P2：仅保留一句话提及（不出现在主报告，在附录）
     - 可疑未来日期（>30天）：自动降入 P2
     """
-    db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
-    if not os.path.exists(db_path):
+    try:
+        conn = psycopg2.connect(**PG_CONFIG)
+        cursor = conn.cursor()
+    except Exception as e:
+        import logging
+        logging.warning(f"[Selector] PostgreSQL connection failed: {e}, falling back to empty")
         return []
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
+    time_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    time_max = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     cursor.execute("""
         SELECT id, title, summary, source_url, published_date, risk_level, sentiment
         FROM events
-        WHERE published_date >= ?
-          AND published_date <= datetime('now', '+7 days')
+        WHERE published_date >= %s
+          AND published_date <= %s
           AND published_date >= '2019-01-01'
         ORDER BY published_date DESC
-        LIMIT ?
-    """, (time_threshold, max_events))
+        LIMIT %s
+    """, (time_threshold, time_max, max_events))
 
     rows = cursor.fetchall()
     conn.close()
