@@ -13,7 +13,7 @@ import os
 import re
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 # 从 collector.py 复用关键词集合（AI + DATA + BLOCKLIST）
@@ -278,6 +278,29 @@ def _is_valid_source(source_url: str) -> bool:
     return True
 
 
+def _is_suspicious_future_date(pub_date_str: str) -> bool:
+    """
+    检查 published_date 是否为可疑的未来日期（超过当前日期 30 天以上）。
+    超过 30 天的未来日期通常是数据来源错误，应降级处理。
+    返回 True 表示可疑，False 表示正常。
+    """
+    if not pub_date_str:
+        return False
+    try:
+        # pub_date_str 格式: "2026-06-25 00:00:00+00:00" 或 "2026-06-25T00:00:00+00:00"
+        # 用 fromisoformat 解析（Python 3.7+）
+        pub_date = datetime.fromisoformat(pub_date_str.replace(' ', 'T'))
+        now = datetime.now(timezone.utc)
+        # 如果 pub_date 是 naive datetime，视为 UTC
+        if pub_date.tzinfo is None:
+            pub_date = pub_date.replace(tzinfo=timezone.utc)
+        # 超过 30 天的未来日期视为可疑
+        future_threshold = now + timedelta(days=30)
+        return pub_date > future_threshold
+    except Exception:
+        return False
+
+
 def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str, Any]]:
     """
     主函数：从数据库拉取事件，P0/P1/P2 筛选 + 截断，返回精简列表。
@@ -286,6 +309,7 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     - P0：最多 15 条，其中 arXiv 论文最多 1 篇（其余论文降入 P1）
     - P1：保留 Top5
     - P2：仅保留一句话提及（不出现在主报告，在附录）
+    - 可疑未来日期（>30天）：自动降入 P2
     """
     db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
     if not os.path.exists(db_path):
@@ -319,6 +343,13 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
         if priority == "BLOCK":
             continue
 
+        # ── V4.1 可疑未来日期降级 ───────────────────────────────────
+        # 如果 published_date 超过当前日期 30 天以上，降为 P2
+        is_future = _is_suspicious_future_date(pub_date)
+        if is_future:
+            priority = "P2"
+            score = -10  # 极低分数，确保排在最后
+
         event_dict = {
             "id": event_id,
             "title": title,
@@ -329,6 +360,7 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
             "sentiment": sentiment,
             "_priority": priority,
             "_score": score,
+            "_future_date": is_future,
         }
 
         if priority == "P0":
@@ -343,9 +375,10 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     p1_events.sort(key=lambda x: x["_score"], reverse=True)
 
     # ── V4.1 论文截断逻辑 ───────────────────────────────────────────────
-    # 从 P0 中分离 arXiv 论文和产业事件
-    p0_papers = [e for e in p0_events if _is_paper_source(e.get("source_url", ""))]
-    p0_industry = [e for e in p0_events if not _is_paper_source(e.get("source_url", ""))]
+    # 从 P0 中分离 arXiv 论文和产业事件（排除可疑未来日期的论文）
+    p0_papers = [e for e in p0_events if _is_paper_source(e.get("source_url", "")) and not e.get("_future_date")]
+    p0_industry = [e for e in p0_events if not _is_paper_source(e.get("source_url", "")) and not e.get("_future_date")]
+    p0_future = [e for e in p0_events if e.get("_future_date")]
 
     # 论文每天最多 1 篇进入 P0（其余降入 P1）
     papers_to_promote = p0_papers[:1]
@@ -358,8 +391,9 @@ def select_and_rank_events(days: int = 1, max_events: int = 50) -> List[Dict[str
     p0_events = p0_industry + papers_to_promote
     p0_events = p0_events[:15]  # 最终上限 15 条
 
-    # 被降级的论文放入 P1（按分数排序后取 Top5）
+    # 被降级的论文放入 P1（按分数排序后取 Top5）；可疑未来日期事件直接降入 P2
     p1_events = (papers_to_demote + p1_events)[:5]
+    p2_events = p2_events + p0_future
     # ── 论文截断逻辑结束 ───────────────────────────────────────────────
 
     # P2 只保留摘要信息，不展开
