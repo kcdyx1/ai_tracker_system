@@ -554,30 +554,60 @@ def parse_feed(feed_url: str, history: HistoryManager, last_crawl: str = None) -
         return []
 
 
-def send_to_api(url: str, rss_summary: str = "") -> tuple[bool, str]:
+def send_to_api(url: str, rss_summary: str = "", max_retries: int = 3) -> tuple[bool, str]:
     """发送URL到后端API进行处理
     返回: (success, source_name)
+
+    V4.1 改进：
+    - 502/503/504 等网关错误自动重试（最多3次）
+    - 失败时打印完整响应内容，便于诊断
     """
     from urllib.parse import urlparse
+    import time
+
     # 从URL提取域名作为默认source_name
     try:
         domain = urlparse(url).netloc.replace("www.", "").replace("blog.", "")
     except:
         domain = url
 
-    try:
-        payload = {"url": url}
-        if rss_summary:
-            payload["rss_summary"] = rss_summary
-        resp = requests.post(API_URL, json=payload, timeout=10)
-        if resp.status_code == 200:
-            log(f"    🎯 成功发射至后端缓冲队列!")
-            return True, domain
-        log(f"    ⚠️ API 拒绝接收: {resp.status_code}")
-        return False, domain
-    except requests.exceptions.RequestException as e:
-        log(f"    ❌ 通讯阻断: {e}")
-        return False, domain
+    payload = {"url": url}
+    if rss_summary:
+        payload["rss_summary"] = rss_summary
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(API_URL, json=payload, timeout=15)
+            if resp.status_code == 200:
+                log(f"    🎯 成功发射至后端缓冲队列!")
+                return True, domain
+
+            # 非200错误，打印完整响应内容
+            try:
+                resp_text = resp.text[:500]
+            except:
+                resp_text = "(无法读取响应体)"
+            log(f"    ⚠️ API 拒绝接收: {resp.status_code} | 响应: {resp_text}")
+
+            # 502/503/504 网关错误，可重试
+            if resp.status_code in (502, 503, 504) and attempt < max_retries:
+                wait = attempt * 2  # 2s, 4s, 6s
+                log(f"    🔄 网关错误，{wait}s 后重试 ({attempt}/{max_retries})")
+                time.sleep(wait)
+                continue
+
+            return False, domain
+
+        except requests.exceptions.RequestException as e:
+            log(f"    ❌ 通讯阻断 (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                wait = attempt * 2
+                log(f"    🔄 等待 {wait}s 后重试...")
+                time.sleep(wait)
+                continue
+            return False, domain
+
+    return False, domain
 
 
 def run_auto_feeder():
