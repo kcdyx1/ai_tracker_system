@@ -53,3 +53,4 @@ backfill_*.py
 *.v4bak
 backup/
 
+celerybeat-schedule
