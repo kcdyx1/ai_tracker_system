@@ -41,3 +41,15 @@ polished_article.md
 # Prompt 模板文件
 prompt_templates.py
 style_prompt.py
+
+# Debug/check scripts
+check_*.py
+patch_*.py
+test_*.py
+fix_*.py
+backfill_*.py
+
+# Backup files
+*.v4bak
+backup/
+

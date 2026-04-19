@@ -256,7 +256,7 @@ def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool
 
     for attempt in range(max_retries):
         try:
-            result = extract_knowledge(text, context_entities_str)
+            result = extract_knowledge(text, context_entities_str, source_url)
 
             # 基本验证
             if result is None:
