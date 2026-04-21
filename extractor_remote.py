@@ -55,7 +55,7 @@ def _get_extractor():
             raise ValueError("请设置环境变量 MINIMAX_API_KEY")
         client = Anthropic(
             api_key=api_key,
-            base_url=os.environ.get("ANTHROPIC_BASE_URL", "http://")
+            base_url=os.environ.get("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/")
         )
         _client_local.client = instructor.from_anthropic(client)
     return _client_local.client
@@ -65,7 +65,7 @@ def create_extractor():
     return _get_extractor()
 
 
-def extract_knowledge(text: str, context_entities_str: str = "", source_url: str = "") -> ExtractionResult:
+def extract_knowledge(text: str, context_entities_str: str = "") -> ExtractionResult:
     """
     从文本中提取知识
 
@@ -89,16 +89,15 @@ def extract_knowledge(text: str, context_entities_str: str = "", source_url: str
 
 2. 事件 (Events):
    - 事件标题、发生时间 (date)、报道/发布时间 (published_date)、摘要
-   - 必须严格区分 date（事件真实发生的历史时间）和 published_date（这篇新闻报道发布的时间）
-   - 【重要】每个事件必须同时提取以下两个情报字段（仅对Top3核心事件填值，其余事件设为null）：
-     * risk_level: 风险等级，取值范围为 高危 / 中风险 / 低风险 / 无风险 / null
-     * sentiment: 情感倾向，取值范围为 利好 / 利空 / 中性 / null
-   - 判断规则：
-     * 涉及监管收紧、裁员潮、泡沫破裂、幻觉危害、数据泄露、恶意滥用 等负面事件 → 高危
-     * 涉及商业竞争加剧、监管不确定性、技术落地困难、成本压力 等中性偏负 → 中风险
-     * 涉及技术突破、产品发布、开源发布、战略合作、融资扩张 等正面事件 → 低风险
-     * 涉及产业标准制定、学术研究、安全评测等中性正向 → 无风险
-     * 涉及业绩增长、市场扩张、生态繁荣 等明确正面信号 → 利好
+   - 必须严格区分 date（事件真实发生的历史时间）和 published_date（这篇新闻报道发布的时间）。
+   - 【必须提取】摘要中必须包含：具体数字（参数规模如5B、性能指标、百分比）、技术细节（架构名称、核心创新点）、商业影响（股价变动、用户规模、市场份额）、竞品对比（超越/落后于哪些竞品）
+
+   【重要】战略审计字段（必须提取，放入 attributes_json）：
+   - tech_disruption_index (1-10): 技术破坏力，10为诺贝尔奖级别/范式转移，1为微迭代
+   - industry_moat_impact (1-10): 对现有产业护城河的影响程度
+   - is_paradigm_shift (bool): 是否属于范式转移（如Transformer取代RNN、Attention取代CNN）
+   - primary_entity_role (str): "definer"=定义赛道规则者/"follower"=追随实现者/"disruptor"=颠覆格局者
+   - noise_level (1-10): 营销噪音程度，10为"吊打GPT-4"类标题党，1为有数据支撑的客观陈述
 
 3. 关系 (Relationships):
    - 公司与产品: RELEASED (发布)
@@ -111,9 +110,15 @@ def extract_knowledge(text: str, context_entities_str: str = "", source_url: str
 - 在生成 Events 和 Relationships 时，source_id, target_id 和 involved_entity_ids 必须严格使用你刚才为实体生成的这些 ID
 - 绝对不能使用实体名称，必须使用 ID！
 
-【重要】source_url 要求：
-- 如果提供了 source_url（信息来源链接），则必须将其填充到每个 Event 对象的 source_url 字段中
-- source_url 即上下文中的 url，不得为空
+【重要】摘要增强要求：
+- 事件摘要(summary字段)必须经过理解和重述，不允许仅复制原文
+- 必须包含：核心事实（谁做了什么）、关键数字指标、初步产业影响判断
+- 禁止：仅复制原文摘要而不理解内容
+
+【重要】战略审计判断：
+- 如果涉及OpenAI, Anthropic, NVIDIA, Meta, Google DeepMind, 智谱AI, 字节跳动, 华为, 阿里, 百度, 腾讯, DeepSeek, 月之暗面等核心厂商，必须判断是"常规迭代"还是"战略奇袭"
+- 如果是战略奇袭（改变竞争格局），tech_disruption_index 至少 8 分以上
+- Product实体必须提取底层技术参数（参数量、上下文窗口、架构），如果参数缺失，tech_disruption_index 扣 2 分
 
 【重要】内容限制：
 - 如果文本内容极其丰富，请专注于提取「最具代表性」的 15 个实体和 5 个核心事件，确保 JSON 结构的完整性。不要试图穷尽所有细节。
@@ -124,11 +129,6 @@ def extract_knowledge(text: str, context_entities_str: str = "", source_url: str
 
 请严格按照JSON格式返回结果。"""
 
-    # 构建 user prompt，包含 source_url 信息
-    user_content = f"请从以下文本中提取知识：\n\n{text}"
-    if source_url:
-        user_content += f"\n\n【信息来源】{source_url}"
-
     # 使用 instructor 调用模型
     result = extractor.chat.completions.create(
         model="MiniMax-M2.7-highspeed",
@@ -137,7 +137,7 @@ def extract_knowledge(text: str, context_entities_str: str = "", source_url: str
         messages=[
             {
                 "role": "user",
-                "content": user_content
+                "content": f"请从以下文本中提取知识：\n\n{text}"
             }
         ],
         response_model=ExtractionResult,
@@ -187,9 +187,7 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
             print(f"过滤日期解析失败的事件: {event.title[:30]}... 错误: {e}")
             continue
 
-        # 1b. published_date validation + 未来日期纠正
-        # 当 LLM 生成的 published_date 为未来日期时，用 event.date 代替
-        # （RSS fallback 场景下 LLM 容易捏造未来日期，但 event.date 通常是准确的）
+        # 1b. published_date validation (prevent LLM from using historical dates)
         try:
             pub_date = event.published_date
             if hasattr(pub_date, 'year'):
@@ -199,11 +197,6 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
                 if pd < min_date:
                     print(f"过滤异常报道日期事件: {event.title[:30]}... (报道日期: {pd.year})")
                     continue
-                if pd > max_date:
-                    # 未来日期：用 event.date 代替（event.date 通常是真实事件时间，更可靠）
-                    print(f"⚠️ 纠正未来 published_date: {event.title[:30]}... "
-                          f"({pd.date()} -> {event.date.date()})")
-                    event.published_date = event.date
         except (ValueError, TypeError, AttributeError):
             pass
 
@@ -211,8 +204,13 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
         text_to_check = (event.title + " " + event.summary).lower()
         is_relevant = any(kw.lower() in text_to_check for kw in ai_keywords)
         if not is_relevant:
-            print(f"⚠️ 过滤低相关事件: {event.title[:30]}...")
-            continue
+            # 再检查实体类型 - 如果有关联的公司/产品/技术实体，也认为是相关的
+            if event.involved_entity_ids:
+                # 有关联实体，保留
+                pass
+            else:
+                print(f"⚠️ 过滤低相关事件: {event.title[:30]}...")
+                continue
 
         # 3. 来源校验 - 有来源URL的事件优先保留
         # 这可以作为后续排序依据，这里先不过滤
@@ -225,7 +223,7 @@ def validate_extraction_result(result: ExtractionResult, backfill_mode: bool = F
     result.events = valid_events
     return result
 
-def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool = False, source_url: str = "") -> ExtractionResult:
+def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool = False) -> ExtractionResult:
     """
     带验证与 MiniMax 强力限流保护的提取函数
 
@@ -263,7 +261,7 @@ def extract_with_validation(text: str, max_retries: int = 3, backfill_mode: bool
 
     for attempt in range(max_retries):
         try:
-            result = extract_knowledge(text, context_entities_str, source_url)
+            result = extract_knowledge(text, context_entities_str)
 
             # 基本验证
             if result is None:

@@ -54,3 +54,4 @@ backfill_*.py
 backup/
 
 celerybeat-schedule
+mcp_venv/

@@ -10,7 +10,7 @@ LLM生成(style_prompt) → 飞书推送(feishu) + 微信草稿箱(wechat)
 import os
 import sys
 import json
-import psycopg2
+import sqlite3
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,15 +42,6 @@ def log(*args, **kwargs):
 
 # ── 环境变量 ──────────────────────────────────────────────────────────────
 load_dotenv()
-
-PG_CONFIG = {
-    "host": "172.20.0.4",
-    "port": 5432,
-    "user": "postgres",
-    "password": "difyai123456",
-    "database": "ai_tracker",
-}
-
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
 # ── LLM 客户端 ────────────────────────────────────────────────────────────
@@ -69,8 +60,8 @@ def _get_anthropic_client() -> anthropic.Anthropic:
 def _run_filter(days: int) -> dict:
     """数据清洗与过滤：P0/P1/P2 筛选 + 硬性截断"""
     try:
-        from intelligence_selector import select_and_rank_events
-        result = select_and_rank_events(days=days, max_events=50)
+        from selector_v5 import select_and_rank_events
+        result = select_and_rank_events(days=days)
         log(f"[Filter] P0={len(result['p0'])} | P1={len(result['p1'])} | P2_brief={len(result['p2_brief'])}")
         return result
     except Exception as e:
@@ -118,26 +109,32 @@ def _retrieve_entity_history(entity_name: str, days: int = 90) -> str:
     """
     查询某实体近 N 天的相关事件摘要。
     返回格式化的历史轨迹字符串，如无记录返回空字符串。
+    增强版：包含更多上下文，支持战略延续/转向判断。
     """
-    try:
-        conn = psycopg2.connect(**PG_CONFIG)
-        cursor = conn.cursor()
-    except Exception:
-        return f"- {entity_name}：近{days}天无重大动作记录"
+    db_path = os.path.join(os.path.dirname(__file__), "ai_tracker.db")
+    if not os.path.exists(db_path):
+        return ""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
     time_threshold = (datetime.now() - timedelta(days=days)).isoformat()
     cursor.execute("""
-        SELECT title, published_date
+        SELECT title, summary, published_date
         FROM events
-        WHERE published_date >= %s
-          AND (title ILIKE %s OR summary ILIKE %s)
+        WHERE published_date >= ?
+          AND (title LIKE ? OR summary LIKE ?)
         ORDER BY published_date DESC
-        LIMIT 5
+        LIMIT 8
     """, (time_threshold, f"%{entity_name[:4]}%", f"%{entity_name[:4]}%"))
     rows = cursor.fetchall()
     conn.close()
     if not rows:
         return f"- {entity_name}：近{days}天无重大动作记录"
-    summaries = [f"{str(r[1])[:10]}：{str(r[0])[:30]}" for r in rows[:3]]
+    summaries = []
+    for r in rows[:5]:
+        date = r[2][:10] if r[2] else "未知日期"
+        title = r[0][:40] if r[0] else "无标题"
+        summary_fragment = r[1][:30] if r[1] else ""
+        summaries.append(f"{date}【{title}】{summary_fragment}")
     return f"- {entity_name}：{'；'.join(summaries)}"
 
 
@@ -166,69 +163,124 @@ def _extract_domain(url: str) -> str:
     except:
         return "未知来源"
 
+def _is_paper_source(url: str) -> bool:
+    """判断是否为论文来源（arxiv.org）"""
+    return "arxiv.org" in (url or "").lower()
+
 def _build_context(filtered_data: dict, paper_highlight: str, report_type: str) -> str:
     """
     构建 LLM 上下文字符串
 
-    V4.1 重构：按【今日重要发布】【产业动态】【核心论文选读】结构输出，
-    并标注每条事件的来源域名。
+    V8重构：严格分离产业事件和学术论文
+    - 产业事件只能进入正文板块
+    - 学术论文只能进入【核心论文选读】板块
     """
     lines = []
 
-    # P0 事件（全部）
+    # P0/P1/P2事件
     p0 = filtered_data.get("p0", [])
     p1 = filtered_data.get("p1", [])
     p2_brief = filtered_data.get("p2_brief", [])
+    # V8新增：academic_papers（所有被论文防火墙拦截的事件）
+    academic_papers = filtered_data.get("academic_papers", [])
 
-    # ── V4.1 分离论文和产业事件 ───────────────────────────────────────
-    p0_papers = [e for e in p0 if "arxiv.org" in (e.get("source_url") or "")]
-    p0_industry = [e for e in p0 if "arxiv.org" not in (e.get("source_url") or "")]
+    # ── 产业事件（正文）────────────────────────────────────────────
 
-    # ── 【今日重要发布】─ 模型/框架/范式更新 ─────────────────────────
+    # ── 【今日重要发布】─ P0产业事件 ──────────────────────────────
     lines.append("【今日重要发布】（模型/框架/范式更新，限5条）")
-    if p0_industry:
-        for i, e in enumerate(p0_industry[:5], 1):
-            src = _extract_domain(e.get("source_url", ""))
+    if p0:
+        for i, e in enumerate(p0[:5], 1):
+            src = _extract_domain(e.get("source_url") or "")
             lines.append(f"  {i}. {e['title']}（来源: {src}）")
             if e.get("summary"):
-                lines.append(f"     {e['summary'][:150]}...")
+                lines.append(f"     {e['summary'][:600]}...")  # 扩展到600字
     else:
         lines.append("  （今日无重要发布记录）")
     lines.append("")
 
-    # ── 【产业动态】─ 融资/收购/高管变动/商业化 ──────────────────────
+    # ── 【产业动态】─ P1产业事件 ────────────────────────────────
     lines.append("【产业动态】（融资/收购/高管变动/商业化，限3条）")
     if p1:
         for i, e in enumerate(p1[:3], 1):
-            src = _extract_domain(e.get("source_url", ""))
+            src = _extract_domain(e.get("source_url") or "")
             lines.append(f"  {i}. {e['title']}（来源: {src}）")
             if e.get("summary"):
-                lines.append(f"     {e['summary'][:120]}...")
+                lines.append(f"     {e['summary'][:500]}...")
     else:
         lines.append("  （今日无重大产业动态）")
     lines.append("")
 
-    # ── 【核心论文选读】─ 每日1篇 ────────────────────────────────────
-    if p0_papers:
-        lines.append("【核心论文选读】（每日1篇）")
-        paper = p0_papers[0]
-        src = _extract_domain(paper.get("source_url", ""))
-        lines.append(f"  📄 {paper['title']}")
-        lines.append(f"    来源: {src}")
-        if paper.get("summary"):
-            lines.append(f"    {paper['summary'][:200]}...")
+    # ── 学术论文（专属出口）────────────────────────────────────────
+
+    # ── 【核心论文选读】─ V8论文防火墙，唯一合法出口 ───────────
+    # 收集所有学术论文（V8的academic_papers + 降级arXiv论文）
+    p0_papers = [e for e in p0 if _is_paper_source(e.get("source_url") or "")]
+    p1_papers = [e for e in p1 if _is_paper_source(e.get("source_url") or "")]
+    all_papers = list(academic_papers)
+    all_papers.extend(p0_papers)
+    all_papers.extend(p1_papers)
+
+    # 去重（基于URL）
+    seen_urls = set()
+    unique_papers = []
+    for p in all_papers:
+        url = p.get("source_url") or ""
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_papers.append(p)
+
+    if unique_papers:
+        lines.append("【核心论文选读】（每日1-2篇，不超过2篇）")
+        # 按tech_disruption_index排序，取最高的2篇
+        def get_disruption_index(e):
+            attrs = e.get("attributes_json") or {}
+            if isinstance(attrs, str):
+                try:
+                    import json
+                    attrs = json.loads(attrs)
+                except:
+                    attrs = {}
+            return attrs.get("tech_disruption_index", 5) if isinstance(attrs, dict) else 5
+
+        unique_papers.sort(key=get_disruption_index, reverse=True)
+        for paper in unique_papers[:2]:
+            src = _extract_domain(paper.get("source_url") or "")
+            lines.append(f"  📄 {paper['title']}")
+            lines.append(f"    来源: {src}")
+            if paper.get("summary"):
+                lines.append(f"    {paper['summary'][:500]}...")
+            # 显示战略审计标签
+            attrs = paper.get("attributes_json") or {}
+            if isinstance(attrs, str):
+                try:
+                    import json
+                    attrs = json.loads(attrs)
+                except:
+                    attrs = {}
+            if isinstance(attrs, dict):
+                tdi = attrs.get("tech_disruption_index")
+                if tdi:
+                    lines.append(f"    [技术破坏力: {tdi}/10]")
+                is_ps = attrs.get("is_paradigm_shift")
+                if is_ps:
+                    lines.append(f"    [范式转移: {'是' if is_ps else '否'}]")
         lines.append("")
     elif paper_highlight:
-        # 如果 P0 没有论文但 paper_highlight 有内容，也显示
         lines.append("【核心论文选读】")
-        lines.append(f"  {paper_highlight[:300]}")
+        lines.append(f"  {paper_highlight[:600]}")
         lines.append("")
 
-    # ── P2 附录（不展开）─────────────────────────────────────────────
-    if p2_brief:
+    # ── P2附录（过滤论文后）───────────────────────────────────────
+    p2_industry = [e for e in p2_brief if not _is_paper_source(e.get("source_url") or "")]
+    if p2_industry:
         lines.append("【附录：其他值得关注】")
-        for e in p2_brief:
-            lines.append(f"  - {e['title']} ({e['published_date'][:10]})")
+        for e in p2_industry:
+            pub_date = e.get('published_date', '')
+            if hasattr(pub_date, 'strftime'):
+                pub_date = pub_date.strftime('%Y-%m-%d')
+            elif isinstance(pub_date, str) and len(pub_date) > 10:
+                pub_date = pub_date[:10]
+            lines.append(f"  - {e['title']} ({pub_date})")
 
     context = "\n".join(lines)
     return context
