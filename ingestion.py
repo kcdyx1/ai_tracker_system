@@ -10,6 +10,21 @@ import random
 import requests
 import cloudscraper
 
+# 域名限流
+import time as _time_module
+_domain_last_request = {}
+
+def _rate_limit_domain(url, min_interval=2.0):
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc
+    now = _time_module.time()
+    last = _domain_last_request.get(domain, 0)
+    elapsed = now - last
+    if elapsed < min_interval:
+        _time_module.sleep(min_interval - elapsed)
+    _domain_last_request[domain] = _time_module.time()
+
+
 
 # 多个 User-Agent 轮换
 USER_AGENTS = [
@@ -51,6 +66,8 @@ def fetch_clean_markdown(url: str) -> str:
     Returns:
         纯净的 Markdown 文本，失败返回空字符串
     """
+    _rate_limit_domain(url, min_interval=3.0)
+
     # 确保 URL 是 https:// 开头
     if url.startswith("http://"):
         url = "https://" + url[7:]
@@ -90,7 +107,7 @@ def fetch_direct(url: str) -> str:
     print(f"  🔄 尝试 cloudscraper 直接抓取...")
     try:
         scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False, 'custom': random.choice(USER_AGENTS)})
-        response = scraper.get(url, timeout=20, proxies=proxies)
+        response = scraper.get(url, timeout=20, proxies=get_proxies())
         
         if response.status_code == 200:
             # 尝试提取纯文本

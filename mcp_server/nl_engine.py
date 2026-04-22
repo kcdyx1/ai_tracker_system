@@ -7,8 +7,8 @@ from typing import Optional
 from anthropic import Anthropic
 
 # MiniMax API 配置
-MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "sk-xv7avxH7fcB3pN3INjuSHsvfIzzYDB6itaz60IsMP404QtKx")
-MINIMAX_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "http://114.132.200.116:3888/")
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "sk-cp-W86nFgVDO6HwjK4jGw-_WrtN_b84EFi-u7OC1fUoBEeZ-0o_4sJ9r6sCR9lRI4AbolC4QurzaniyLjdI6s9I_hYzBrbpVw2dDeiJ0tQNoTSCQGa5yO6OkX4")
+MINIMAX_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
 MINIMAX_MODEL = "MiniMax-M2.7-highspeed"
 
 # NL 理解 System Prompt
