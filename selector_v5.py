@@ -22,7 +22,7 @@ import json
 import psycopg2
 
 PG_CONFIG = {
-    "host": "172.20.0.4",
+    "host": os.environ.get("AI_TRACKER_PG_HOST", "172.20.0.9"),
     "port": 5432,
     "user": "postgres",
     "password": "difyai123456",

@@ -55,7 +55,8 @@ def _format_dt(dt):
         except ValueError:
             return dt
     if hasattr(dt, "tzinfo") and dt.tzinfo is None:
-        # Naive datetime: treat as local time, convert to UTC
+        # Naive datetime: assign UTC label (assumes input is already UTC, not local time)
+        # WARNING: This does NOT convert the time value, just labels it as UTC
         dt = dt.replace(tzinfo=timezone.utc)
     elif hasattr(dt, "tzinfo") and dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc)
